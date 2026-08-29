@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#17181b">
+    <title>Terminal Agent Launcher</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Project filters">
+        <div class="brand">
+          <span class="app-icon" aria-hidden="true"><span></span></span>
+          <div>
+            <strong>Terminal Agent Launcher</strong>
+            <span>Local projects</span>
+          </div>
+        </div>
+
+        <nav class="sidebar-nav" aria-label="Views">
+          <button class="nav-item is-active" type="button" data-view="all">
+            <span class="nav-symbol nav-symbol-grid" aria-hidden="true"></span>
+            <span>All Projects</span>
+            <span class="nav-count" data-count="all">0</span>
+          </button>
+          <button class="nav-item" type="button" data-view="favorites">
+            <span class="nav-symbol nav-symbol-star" aria-hidden="true">★</span>
+            <span>Favorites</span>
+            <span class="nav-count" data-count="favorites">0</span>
+          </button>
+          <button class="nav-item" type="button" data-view="recents">
+            <span class="nav-symbol nav-symbol-clock" aria-hidden="true"></span>
+            <span>Recents</span>
+            <span class="nav-count" data-count="recents">0</span>
+          </button>
+        </nav>
+
+        <section class="locations-section" aria-labelledby="locations-heading">
+          <div class="section-label-row">
+            <h2 id="locations-heading">Locations</h2>
+            <button class="icon-button small" id="add-location-sidebar" type="button" aria-label="Add location">+</button>
+          </div>
+          <div id="locations-list" class="locations-list"></div>
+        </section>
+
+        <div class="sidebar-footer">
+          <div class="service-status" aria-label="Local tool status">
+            <span data-status="iterm">iTerm2</span>
+            <span data-status="claude">Claude</span>
+            <span data-status="codex">Codex</span>
+          </div>
+          <p><kbd>C</kbd> Claude <span aria-hidden="true">|</span> <kbd>X</kbd> Codex</p>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="toolbar">
+          <label class="search-field" for="project-search">
+            <span class="search-icon" aria-hidden="true"></span>
+            <span class="visually-hidden">Search projects</span>
+            <input id="project-search" type="search" autocomplete="off" placeholder="Search projects" spellcheck="false">
+            <kbd>⌘K</kbd>
+          </label>
+          <div class="toolbar-actions">
+            <button class="icon-button" id="refresh-projects" type="button" aria-label="Refresh projects" title="Refresh projects">
+              <span class="refresh-icon" aria-hidden="true"></span>
+            </button>
+            <button class="primary-button" id="add-location" type="button">
+              <span aria-hidden="true">+</span>
+              Add Folder
+            </button>
+          </div>
+        </header>
+
+        <section class="content-panel" aria-labelledby="view-title">
+          <div class="content-heading">
+            <div>
+              <h1 id="view-title">All Projects</h1>
+              <p id="project-summary">Loading folders</p>
+            </div>
+            <p class="selection-hint" id="selection-hint">Select a folder, then press C or X</p>
+          </div>
+
+          <div class="project-list-shell">
+            <div class="project-list-header" aria-hidden="true">
+              <span></span>
+              <span>Name</span>
+              <span>Location</span>
+              <span>Modified</span>
+              <span>Open with</span>
+            </div>
+            <div class="project-scroll">
+              <div id="loading-state" class="loading-state" aria-label="Loading projects">
+                <span></span><span></span><span></span><span></span><span></span>
+              </div>
+              <div id="project-list" class="project-list" role="listbox" aria-label="Projects"></div>
+              <div id="empty-state" class="empty-state" hidden>
+                <span class="empty-folder" aria-hidden="true"></span>
+                <h2>No folders here</h2>
+                <p>Change the search or add another folder location.</p>
+                <button class="secondary-button" type="button" id="empty-add-location">Add Folder</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="location-dialog" class="location-dialog">
+      <form id="location-form">
+        <div class="dialog-heading">
+          <div>
+            <h2>Add a location</h2>
+            <p>Use a project folder directly or scan the folders inside a location.</p>
+          </div>
+          <button class="icon-button small" id="close-location-dialog" type="button" aria-label="Close">×</button>
+        </div>
+
+        <label class="field-label" for="location-path">Folder path</label>
+        <input class="path-input" id="location-path" name="path" type="text" placeholder="~/Projects" autocomplete="off" required>
+
+        <fieldset class="mode-picker">
+          <legend>How should it appear?</legend>
+          <label>
+            <input type="radio" name="kind" value="folder" checked>
+            <span><strong>Single folder</strong><small>Add this folder as one project.</small></span>
+          </label>
+          <label>
+            <input type="radio" name="kind" value="root">
+            <span><strong>Scan location</strong><small>List each folder immediately inside it.</small></span>
+          </label>
+        </fieldset>
+
+        <p class="form-error" id="location-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button class="secondary-button" id="cancel-location" type="button">Cancel</button>
+          <button class="primary-button" type="submit">Add</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="launch-dialog" class="location-dialog launch-dialog" aria-labelledby="launch-title">
+      <form id="launch-form">
+        <div class="dialog-heading launch-dialog-heading">
+          <div>
+            <p class="dialog-eyebrow">Launch session</p>
+            <h2 id="launch-title">Open with Claude</h2>
+            <p>Choose how much access this session gets and where iTerm2 opens it.</p>
+          </div>
+          <button class="icon-button small" id="close-launch-dialog" type="button" aria-label="Close">×</button>
+        </div>
+
+        <div class="launch-project">
+          <span class="folder-icon" aria-hidden="true"></span>
+          <span class="launch-project-copy">
+            <strong id="launch-project-name"></strong>
+            <small id="launch-project-path"></small>
+          </span>
+          <span class="agent-badge" id="launch-agent-badge"></span>
+        </div>
+
+        <fieldset class="launch-fieldset permission-picker">
+          <legend>Permission</legend>
+          <div id="launch-permissions" class="permission-options"></div>
+        </fieldset>
+
+        <fieldset class="launch-fieldset destination-picker">
+          <legend>Open in iTerm2</legend>
+          <div class="segmented-control">
+            <label>
+              <input type="radio" name="destination" value="tab" checked>
+              <span><span class="destination-icon tab-icon" aria-hidden="true"></span>New Tab</span>
+            </label>
+            <label>
+              <input type="radio" name="destination" value="window">
+              <span><span class="destination-icon window-icon" aria-hidden="true"></span>New Window</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="command-preview">
+          <span>Command preview</span>
+          <code id="launch-command"></code>
+        </div>
+
+        <div class="bypass-warning" id="bypass-warning" hidden>
+          <strong>Full bypass removes safety protections.</strong>
+          <p>The agent can run commands and modify files without asking.</p>
+          <label>
+            <input id="confirm-bypass" type="checkbox">
+            <span>I understand and want to launch this session.</span>
+          </label>
+        </div>
+
+        <p class="form-error" id="launch-error" role="alert" hidden></p>
+        <div class="dialog-actions launch-actions">
+          <button class="secondary-button" id="cancel-launch" type="button">Cancel</button>
+          <button class="primary-button" id="confirm-launch" type="submit">Launch Claude</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

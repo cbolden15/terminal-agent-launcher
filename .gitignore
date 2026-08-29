@@ -1,0 +1,15 @@
+.env
+.env.local
+node_modules/
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+dist/
+build/
+.DS_Store
+coverage/
+*.log
+.agent-launchpad-test/
+.codegraph/
+docs/ai/workstreams/
