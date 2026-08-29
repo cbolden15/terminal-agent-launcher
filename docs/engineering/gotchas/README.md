@@ -51,6 +51,16 @@ Non-obvious behaviors and fixes discovered while developing Terminal Agent Launc
 
 **Discovered:** 2026-08-29
 
+### CI-001 GitHub Actions can pass while running deprecated action runtimes
+
+**Symptom:** CI succeeds but annotates every JavaScript action because its major version targets a deprecated Node runtime.
+
+**Cause:** Older `actions/checkout`, `actions/setup-python`, and `actions/setup-node` releases bundle their own Node runtime independently of the project Node version configured in the workflow.
+
+**Fix:** Pin current action releases by full commit SHA, keep the version in an inline comment, and enable Dependabot updates for the `github-actions` ecosystem.
+
+**Discovered:** 2026-08-29
+
 <!--
 ### CATEGORY-001 Title
 
