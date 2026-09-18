@@ -550,6 +550,7 @@ def run_gate(
                 list(command),
                 cwd=worktree,
                 env=environment,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 stdout=log,
                 stderr=subprocess.STDOUT,

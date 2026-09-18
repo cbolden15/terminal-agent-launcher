@@ -72,6 +72,16 @@ Non-obvious behaviors and fixes discovered while developing Terminal Agent Launc
 
 **Discovered:** 2026-09-18
 
+### RESEARCH-002 Autonomous test gates must detach stdin
+
+**Symptom:** `tal research` stalls during its baseline gate when launched from an interactive terminal.
+
+**Cause:** The test subprocess inherited the terminal, so tests that intentionally branch on `stdin.isatty()` displayed a confirmation prompt and waited for input.
+
+**Fix:** Run every research test gate with stdin connected to `DEVNULL`. Autonomous verification must never inherit interactive input.
+
+**Discovered:** 2026-09-18
+
 <!--
 ### CATEGORY-001 Title
 

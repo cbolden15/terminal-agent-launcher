@@ -69,7 +69,7 @@ class ResearchTestCase(unittest.TestCase):
 
             self.assertEqual(list(cache.rglob("*.pyc")), [])
 
-    def test_test_gate_disables_python_bytecode_writes(self) -> None:
+    def test_test_gate_is_noninteractive_and_disables_python_bytecode_writes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             completed = subprocess.CompletedProcess(["python3"], 0)
@@ -87,6 +87,7 @@ class ResearchTestCase(unittest.TestCase):
             self.assertTrue(passed)
             self.assertEqual(detail, "test command exited 0")
             self.assertEqual(run.call_args.kwargs["env"]["PYTHONDONTWRITEBYTECODE"], "1")
+            self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
 
     def test_public_corpus_has_no_confident_wrong_routes_or_errors(self) -> None:
         cases = load_cases(ROOT)
