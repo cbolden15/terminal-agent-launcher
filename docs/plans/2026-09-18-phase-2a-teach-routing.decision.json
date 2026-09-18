@@ -1,0 +1,14 @@
+{
+  "id": "2026-09-18-phase-2a-teach-routing-notes",
+  "title": "Implementation notes — Milestone 2A teach and exact routing corrections",
+  "subtitle": "starting · 2026-09-18 16:23 CDT",
+  "introTitle": "How to use",
+  "intro": "<p>Each item is a decision, deviation, or tradeoff made during implementation. <strong>Acknowledge</strong> if fine. <strong>Discuss</strong> to write what should change. <strong>Revert</strong> to flag for undo.</p>",
+  "actions": ["acknowledge", "discuss", "revert"],
+  "groups": [
+    {"id": "phase-1", "label": "Phase 1 — secure feedback and receipt storage", "badge": "P1"},
+    {"id": "phase-2", "label": "Phase 2 — exact override routing", "badge": "P2"},
+    {"id": "phase-3", "label": "Phase 3 — teach CLI and verification", "badge": "P3"}
+  ],
+  "items": []
+}
