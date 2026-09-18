@@ -13,7 +13,7 @@ from .server import (
     DEFAULT_CONFIG_PATH,
     ConfigError,
     canonical_path,
-    discover_projects,
+    discover_cli_projects,
     expand_path,
     load_config,
     save_config,
@@ -170,7 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         config = load_config(args.config)
-        projects = discover_projects(config)
+        projects = discover_cli_projects(config)
 
         if arguments == ["list"] and args.agent is None:
             _list_projects(projects)

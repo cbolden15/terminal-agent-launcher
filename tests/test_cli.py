@@ -153,6 +153,38 @@ class CliTestCase(unittest.TestCase):
             f"Terminal Agent Launcher\t{self.launcher.resolve()}", output.getvalue()
         )
 
+    def test_cli_catalogs_nested_repositories_for_listing_aliases_and_selectors(self) -> None:
+        nested = self.root / "oss" / "agent-launchpad"
+        nested.mkdir(parents=True)
+        (nested / ".git").mkdir()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(cli.main(["--config", str(self.config_path), "list"]), 0)
+        self.assertIn(f"agent-launchpad\t{nested.resolve()}", output.getvalue())
+        self.assertNotIn(f"oss\t{self.root / 'oss'}", output.getvalue())
+
+        self.assertEqual(
+            cli.main(
+                [
+                    "--config",
+                    str(self.config_path),
+                    "alias",
+                    "add",
+                    "launcher",
+                    str(nested),
+                ]
+            ),
+            0,
+        )
+        with patch("terminal_agent_launcher.cli.launch_project", return_value=0) as launch:
+            self.assertEqual(
+                cli.main(
+                    ["--config", str(self.config_path), "agent-launchpad", "--agent", "codex"]
+                ),
+                0,
+            )
+        self.assertEqual(launch.call_args.args[0]["path"], str(nested.resolve()))
+
     def test_cli_explicit_agent_disambiguates_list_project_and_alias(self) -> None:
         with patch("terminal_agent_launcher.cli.launch_project", return_value=0) as launch:
             self.assertEqual(

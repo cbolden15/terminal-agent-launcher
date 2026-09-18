@@ -30,6 +30,7 @@ DEFAULT_IGNORED_NAMES = {
     "dist",
     "node_modules",
 }
+CLI_DISCOVERY_MAX_DEPTH = 5
 CLAUDE_PERMISSION_ARGUMENTS = {
     "plan": ("--permission-mode", "plan"),
     "default": ("--permission-mode", "default"),
@@ -288,6 +289,131 @@ def discover_projects(config: dict[str, Any]) -> list[dict[str, Any]]:
                     "location_id": location_id,
                 }
             )
+
+    projects.sort(key=lambda project: (project["name"].casefold(), project["path"]))
+    return projects
+
+
+def _is_git_repository(path: Path) -> bool:
+    """Return whether a directory has a Git directory or worktree Git file."""
+    marker = path / ".git"
+    try:
+        return marker.is_dir() or marker.is_file()
+    except OSError:
+        return False
+
+
+def _cli_child_directories(path: Path, ignored_names: set[str]) -> list[Path]:
+    """List catalogable child directories without following directory symlinks."""
+    try:
+        children = list(path.iterdir())
+    except OSError:
+        return []
+
+    directories: list[Path] = []
+    for child in children:
+        if child.name.startswith(".") or child.name in ignored_names:
+            continue
+        try:
+            if child.is_symlink() or not child.is_dir():
+                continue
+        except OSError:
+            continue
+        directories.append(child)
+    return sorted(directories, key=lambda child: child.name.casefold())
+
+
+def discover_cli_projects(
+    config: dict[str, Any], *, max_depth: int = CLI_DISCOVERY_MAX_DEPTH
+) -> list[dict[str, Any]]:
+    """Build the CLI's nested, local-only catalog without changing browser discovery.
+
+    Root locations contribute Git repositories at or below ``max_depth``. Their
+    immediate leaf, non-repository children remain available when no discovered
+    repository is nested beneath them, preserving support for simple non-Git
+    projects without listing category folders that contain repositories.
+    Explicit folder locations always contribute their configured directory.
+    """
+    if max_depth < 0:
+        raise ValueError("max_depth cannot be negative.")
+
+    ignored_names = set(config.get("ignored_names", DEFAULT_IGNORED_NAMES))
+    projects: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    def add_project(path: Path, location_id: str) -> None:
+        try:
+            resolved = canonical_path(path, strict=True)
+            canonical_value = str(resolved)
+            if canonical_value in seen_paths:
+                return
+            metadata = resolved.stat()
+        except OSError:
+            return
+
+        seen_paths.add(canonical_value)
+        projects.append(
+            {
+                "id": stable_id(canonical_value),
+                "name": resolved.name,
+                "path": canonical_value,
+                "parent": str(resolved.parent),
+                "modified_at": int(metadata.st_mtime),
+                "is_git": _is_git_repository(resolved),
+                "location_id": location_id,
+            }
+        )
+
+    for location in config["locations"]:
+        location_path = canonical_path(
+            expand_path(location["path"]), strict=False
+        )
+        location_id = stable_id(location["kind"], str(location_path))
+        try:
+            if not location_path.is_dir():
+                continue
+        except OSError:
+            continue
+
+        if location["kind"] == "folder":
+            add_project(location_path, location_id)
+            continue
+
+        root_children = _cli_child_directories(location_path, ignored_names)
+        nested_repositories: set[Path] = set()
+
+        def walk(directory: Path, depth: int) -> bool:
+            """Discover repositories below directory and report whether one exists."""
+            found_repository = False
+            for child in _cli_child_directories(directory, ignored_names):
+                child_depth = depth + 1
+                if child_depth > max_depth:
+                    continue
+                if _is_git_repository(child):
+                    add_project(child, location_id)
+                    nested_repositories.add(child)
+                    found_repository = True
+                    continue
+                if walk(child, child_depth):
+                    found_repository = True
+            return found_repository
+
+        if _is_git_repository(location_path):
+            add_project(location_path, location_id)
+        else:
+            walk(location_path, 0)
+
+        for child in root_children:
+            if max_depth < 1:
+                continue
+            if _cli_child_directories(child, ignored_names):
+                continue
+            if child not in nested_repositories and not any(
+                project["path"].startswith(f"{child}{os.sep}")
+                for project in projects
+                if project["location_id"] == location_id
+            ):
+                add_project(child, location_id)
 
     projects.sort(key=lambda project: (project["name"].casefold(), project["path"]))
     return projects
