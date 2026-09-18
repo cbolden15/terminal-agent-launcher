@@ -24,6 +24,7 @@ from terminal_agent_launcher.server import (
     add_location,
     build_launch_command,
     create_server,
+    discover_cli_projects,
     discover_projects,
     load_config,
     prepare_launch,
@@ -72,6 +73,124 @@ class FolderDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(sum(project["name"] == "Alpha" for project in projects), 1)
 
+    def test_browser_discovery_remains_immediate_child_only(self) -> None:
+        nested = self.root / "Category" / "Nested"
+        nested.mkdir(parents=True)
+        (nested / ".git").mkdir()
+
+        self.assertEqual(
+            [project["name"] for project in discover_projects(self.config())],
+            ["Alpha", "beta-2", "Category"],
+        )
+
+
+class CliDiscoveryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary_directory.name)
+        self.root = self.base / "Projects"
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def config(self, *locations: dict[str, str]) -> dict:
+        return {
+            "locations": list(locations) or [{"path": str(self.root), "kind": "root"}],
+            "ignored_names": ["ignored"],
+        }
+
+    def test_catalogs_nested_repositories_and_worktrees(self) -> None:
+        repository = self.root / "oss" / "launcher"
+        repository.mkdir(parents=True)
+        (repository / ".git").mkdir()
+        worktree = self.root / "worktrees" / "agent-config"
+        worktree.mkdir(parents=True)
+        (worktree / ".git").write_text("gitdir: /tmp/agent-config", encoding="utf-8")
+        standalone = self.root / "standalone"
+        standalone.mkdir()
+
+        projects = discover_cli_projects(self.config())
+
+        self.assertEqual(
+            [project["name"] for project in projects],
+            ["agent-config", "launcher", "standalone"],
+        )
+        self.assertTrue(next(project for project in projects if project["name"] == "agent-config")["is_git"])
+        self.assertNotIn("oss", [project["name"] for project in projects])
+        self.assertNotIn("worktrees", [project["name"] for project in projects])
+
+    def test_catalogs_nested_non_git_project_without_listing_its_internal_folders(self) -> None:
+        category = self.root / "work" / "blockdaemon"
+        category.mkdir(parents=True)
+        (category / "AGENTS.md").write_text("Category instructions", encoding="utf-8")
+        project = category / "SecondBrain"
+        project.mkdir()
+        (project / ".codex-test-command").write_text("make test", encoding="utf-8")
+        (project / "README.md").write_text("SecondBrain capture", encoding="utf-8")
+        (project / "scripts").mkdir()
+
+        projects = discover_cli_projects(self.config())
+
+        self.assertEqual([candidate["name"] for candidate in projects], ["SecondBrain"])
+        self.assertFalse(projects[0]["is_git"])
+
+    def test_weak_category_marker_yields_to_nested_repository(self) -> None:
+        category = self.root / "category"
+        category.mkdir()
+        (category / "README.md").write_text("Project collection", encoding="utf-8")
+        (category / "CLAUDE.md").write_text("Category instructions", encoding="utf-8")
+        repository = category / "actual-project"
+        repository.mkdir()
+        (repository / ".git").mkdir()
+
+        projects = discover_cli_projects(self.config())
+
+        self.assertEqual([candidate["name"] for candidate in projects], ["actual-project"])
+
+    def test_honors_maximum_depth_and_prunes_ignored_and_symlinked_directories(self) -> None:
+        within_depth = self.root / "one" / "two" / "three"
+        within_depth.mkdir(parents=True)
+        (within_depth / ".git").mkdir()
+        beyond_depth = self.root / "a" / "b" / "c" / "d"
+        beyond_depth.mkdir(parents=True)
+        (beyond_depth / ".git").mkdir()
+        ignored = self.root / "ignored" / "hidden-repo"
+        ignored.mkdir(parents=True)
+        (ignored / ".git").mkdir()
+        symlink_target = self.base / "symlink-target"
+        symlink_target.mkdir()
+        (symlink_target / ".git").mkdir()
+        (self.root / "linked").symlink_to(symlink_target, target_is_directory=True)
+
+        projects = discover_cli_projects(self.config(), max_depth=3)
+
+        self.assertEqual([project["name"] for project in projects], ["three"])
+        self.assertEqual(discover_cli_projects(self.config(), max_depth=0), [])
+
+    def test_deduplicates_canonical_paths_and_includes_explicit_non_git_folder(self) -> None:
+        repository = self.root / "oss" / "launcher"
+        repository.mkdir(parents=True)
+        (repository / ".git").mkdir()
+        standalone = self.base / "Standalone"
+        standalone.mkdir()
+        root_alias = self.base / "Projects Alias"
+        root_alias.symlink_to(self.root, target_is_directory=True)
+
+        projects = discover_cli_projects(
+            self.config(
+                {"path": str(self.root), "kind": "root"},
+                {"path": str(root_alias), "kind": "root"},
+                {"path": str(repository), "kind": "folder"},
+                {"path": str(standalone), "kind": "folder"},
+            )
+        )
+
+        self.assertEqual(
+            [(project["name"], project["is_git"]) for project in projects],
+            [("launcher", True), ("Standalone", False)],
+        )
+
     def test_add_and_remove_location(self) -> None:
         config = self.config()
         standalone = self.base / "Standalone"
@@ -99,9 +218,16 @@ class FolderDiscoveryTests(unittest.TestCase):
 
         migrated = load_config(canonical, legacy)
 
-        self.assertEqual(migrated, original)
-        self.assertEqual(load_config(canonical), original)
+        expected = {**original, "aliases": {}}
+        self.assertEqual(migrated, expected)
+        self.assertEqual(load_config(canonical), expected)
         self.assertTrue(legacy.exists())
+
+    def test_old_configuration_gets_an_empty_aliases_object(self) -> None:
+        path = self.base / "config.json"
+        path.write_text(json.dumps(self.config()), encoding="utf-8")
+
+        self.assertEqual(load_config(path)["aliases"], {})
 
     def test_canonical_config_wins_when_both_configs_exist(self) -> None:
         canonical = self.base / "new" / "config.json"
@@ -113,7 +239,9 @@ class FolderDiscoveryTests(unittest.TestCase):
         save_config(canonical_config, canonical)
         save_config(legacy_config, legacy)
 
-        self.assertEqual(load_config(canonical, legacy), canonical_config)
+        self.assertEqual(
+            load_config(canonical, legacy), {**canonical_config, "aliases": {}}
+        )
 
     def test_malformed_legacy_config_is_not_replaced_with_defaults(self) -> None:
         canonical = self.base / "new" / "config.json"

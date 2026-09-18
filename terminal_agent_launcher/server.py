@@ -30,6 +30,17 @@ DEFAULT_IGNORED_NAMES = {
     "dist",
     "node_modules",
 }
+CLI_DISCOVERY_MAX_DEPTH = 5
+CLI_STRONG_PROJECT_MARKERS = frozenset(
+    {
+        ".codex-test-command",
+        "Cargo.toml",
+        "go.mod",
+        "package.json",
+        "pyproject.toml",
+    }
+)
+CLI_AGENT_INSTRUCTION_MARKERS = frozenset({"AGENTS.md", "CLAUDE.md"})
 CLAUDE_PERMISSION_ARGUMENTS = {
     "plan": ("--permission-mode", "plan"),
     "default": ("--permission-mode", "default"),
@@ -94,6 +105,7 @@ def default_config() -> dict[str, Any]:
             }
         ],
         "ignored_names": sorted(DEFAULT_IGNORED_NAMES),
+        "aliases": {},
     }
 
 
@@ -149,6 +161,14 @@ def load_config(
     ):
         raise ConfigError("Configuration ignored_names must be a list of strings.")
     config["ignored_names"] = ignored_names
+
+    aliases = config.get("aliases", {})
+    if not isinstance(aliases, dict) or not all(
+        isinstance(alias, str) and isinstance(target, str)
+        for alias, target in aliases.items()
+    ):
+        raise ConfigError("Configuration aliases must be an object of strings.")
+    config["aliases"] = aliases
 
     normalized_locations: list[dict[str, str]] = []
     for location in config["locations"]:
@@ -279,6 +299,158 @@ def discover_projects(config: dict[str, Any]) -> list[dict[str, Any]]:
                     "location_id": location_id,
                 }
             )
+
+    projects.sort(key=lambda project: (project["name"].casefold(), project["path"]))
+    return projects
+
+
+def _is_git_repository(path: Path) -> bool:
+    """Return whether a directory has a Git directory or worktree Git file."""
+    marker = path / ".git"
+    try:
+        return marker.is_dir() or marker.is_file()
+    except OSError:
+        return False
+
+
+def _cli_child_directories(path: Path, ignored_names: set[str]) -> list[Path]:
+    """List catalogable child directories without following directory symlinks."""
+    try:
+        children = list(path.iterdir())
+    except OSError:
+        return []
+
+    directories: list[Path] = []
+    for child in children:
+        if child.name.startswith(".") or child.name in ignored_names:
+            continue
+        try:
+            if child.is_symlink() or not child.is_dir():
+                continue
+        except OSError:
+            continue
+        directories.append(child)
+    return sorted(directories, key=lambda child: child.name.casefold())
+
+
+def _cli_project_markers(path: Path) -> tuple[bool, bool]:
+    """Return strong and weak evidence that a non-Git directory is a project."""
+    try:
+        children = [
+            child
+            for child in path.iterdir()
+            if not child.is_symlink() and child.is_file()
+        ]
+    except OSError:
+        return False, False
+
+    names = {child.name for child in children}
+    strong = bool(names & CLI_STRONG_PROJECT_MARKERS)
+    has_readme = any(name.startswith("README") for name in names)
+    weak = has_readme and bool(names & CLI_AGENT_INSTRUCTION_MARKERS)
+    return strong, weak
+
+
+def discover_cli_projects(
+    config: dict[str, Any], *, max_depth: int = CLI_DISCOVERY_MAX_DEPTH
+) -> list[dict[str, Any]]:
+    """Build the CLI's nested, local-only catalog without changing browser discovery.
+
+    Root locations contribute Git repositories at or below ``max_depth``. Their
+    immediate leaf, non-repository children remain available when no discovered
+    repository is nested beneath them, preserving support for simple non-Git
+    projects without listing category folders that contain repositories.
+    Explicit folder locations always contribute their configured directory.
+    """
+    if max_depth < 0:
+        raise ValueError("max_depth cannot be negative.")
+
+    ignored_names = set(config.get("ignored_names", DEFAULT_IGNORED_NAMES))
+    projects: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    def add_project(path: Path, location_id: str) -> None:
+        try:
+            resolved = canonical_path(path, strict=True)
+            canonical_value = str(resolved)
+            if canonical_value in seen_paths:
+                return
+            metadata = resolved.stat()
+        except OSError:
+            return
+
+        seen_paths.add(canonical_value)
+        projects.append(
+            {
+                "id": stable_id(canonical_value),
+                "name": resolved.name,
+                "path": canonical_value,
+                "parent": str(resolved.parent),
+                "modified_at": int(metadata.st_mtime),
+                "is_git": _is_git_repository(resolved),
+                "location_id": location_id,
+            }
+        )
+
+    for location in config["locations"]:
+        location_path = canonical_path(
+            expand_path(location["path"]), strict=False
+        )
+        location_id = stable_id(location["kind"], str(location_path))
+        try:
+            if not location_path.is_dir():
+                continue
+        except OSError:
+            continue
+
+        if location["kind"] == "folder":
+            add_project(location_path, location_id)
+            continue
+
+        root_children = _cli_child_directories(location_path, ignored_names)
+        nested_repositories: set[Path] = set()
+
+        def walk(directory: Path, depth: int) -> bool:
+            """Discover project roots below directory and report whether one exists."""
+            found_project = False
+            for child in _cli_child_directories(directory, ignored_names):
+                child_depth = depth + 1
+                if child_depth > max_depth:
+                    continue
+                if _is_git_repository(child):
+                    add_project(child, location_id)
+                    nested_repositories.add(child)
+                    found_project = True
+                    continue
+                strong_marker, weak_marker = _cli_project_markers(child)
+                if strong_marker:
+                    add_project(child, location_id)
+                    found_project = True
+                    continue
+                found_descendant = walk(child, child_depth)
+                if found_descendant:
+                    found_project = True
+                elif weak_marker:
+                    add_project(child, location_id)
+                    found_project = True
+            return found_project
+
+        if _is_git_repository(location_path):
+            add_project(location_path, location_id)
+        else:
+            walk(location_path, 0)
+
+        for child in root_children:
+            if max_depth < 1:
+                continue
+            if _cli_child_directories(child, ignored_names):
+                continue
+            if child not in nested_repositories and not any(
+                project["path"].startswith(f"{child}{os.sep}")
+                for project in projects
+                if project["location_id"] == location_id
+            ):
+                add_project(child, location_id)
 
     projects.sort(key=lambda project: (project["name"].casefold(), project["path"]))
     return projects

@@ -1,0 +1,1 @@
+{"id":"private-example-correction","task":"continue the customer portal migration","expected":"work/example-customer/portal","projects":[{"path":"work/example-customer/portal","metadata":{"README.md":"Customer portal migration."}},{"path":"work/example-customer/api","metadata":{"README.md":"Customer API."}}]}

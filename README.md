@@ -1,19 +1,21 @@
 # Terminal Agent Launcher
 
-Terminal Agent Launcher is a local macOS project browser for starting Claude Code and Codex sessions in iTerm2. Pick a folder, choose a permission level, and open the session in a new tab or window.
+Terminal Agent Launcher includes a portable foreground CLI for starting Claude Code and Codex sessions in a configured project, plus a local macOS project browser for starting sessions in iTerm2.
 
 It runs on your Mac with no account, analytics, cloud service, or API keys.
 
 ## Requirements
 
-- macOS with iTerm2 installed in `/Applications`
 - Python 3.9 or newer
 - Claude Code, Codex CLI, or both available on your shell `PATH`
-- A modern browser with JavaScript enabled
+
+The `tal` CLI core is portable across platforms. The browser launcher and its
+iTerm2 integration remain macOS-only and require iTerm2 installed in
+`/Applications`, plus a modern browser with JavaScript enabled.
 
 ## Install
 
-Clone the repository and install the login service:
+Clone the repository. On macOS, install the browser service with:
 
 ```bash
 git clone https://github.com/cbolden15/terminal-agent-launcher.git
@@ -21,14 +23,149 @@ cd terminal-agent-launcher
 make install
 ```
 
-The installer starts a localhost service and opens [http://127.0.0.1:4317](http://127.0.0.1:4317). It will start automatically when you log in.
-
-You can also install the command with `pipx`:
+On macOS, `make install` installs the login service, starts the localhost
+browser at [http://127.0.0.1:4317](http://127.0.0.1:4317), and configures it
+to start automatically when you log in. To install the commands on your
+`PATH`, use `pipx`:
 
 ```bash
 pipx install git+https://github.com/cbolden15/terminal-agent-launcher.git
-terminal-agent-launcher install
 ```
+
+For a local checkout, use `python3 -m pip install --editable .` instead.
+
+The package provides both commands:
+
+```bash
+terminal-agent-launcher install
+tal --help
+```
+
+`terminal-agent-launcher` remains the browser/service command. `tal` is the
+portable foreground command and does not open iTerm2.
+
+## Portable CLI
+
+List the repositories in the CLI's local catalog:
+
+```bash
+tal list
+```
+
+The CLI scans configured roots to a bounded depth for Git repositories and
+non-Git projects identified by common root files such as `pyproject.toml`,
+`package.json`, `.codex-test-command`, or a README paired with agent
+instructions. Category folders remain excluded when they contain a more
+specific project.
+
+Preview a local task route without starting an agent:
+
+```bash
+tal route "update my global Codex and Claude instructions"
+# agent-config    /Users/calebbolden/Projects/agent-config
+```
+
+Add `--agent` to launch the selected repository, or pass unresolved multi-word
+task text directly to `tal`:
+
+```bash
+tal route "change Terminal Agent Launcher project routing" --agent codex
+tal "change Terminal Agent Launcher project routing" --agent codex
+```
+
+Task routing is deterministic and local. It reads the repository catalog plus
+bounded local metadata, makes no network requests or API calls, and uses zero
+model tokens. Before launching a task route, `tal` prints the selected canonical
+repository, score, confidence margin, and strongest matched terms.
+
+### Teach a routing correction
+
+When a recent local route chose the wrong project, teach the intended project:
+
+```bash
+tal teach SecondBrain --last
+```
+
+`--last` only uses a receipt from the current terminal that is younger than 15
+minutes. It shows the task, route, receipt ID, and age, then asks for
+confirmation. Scripts and non-interactive shells must name the source explicitly:
+
+```bash
+tal teach SecondBrain --receipt ROUTE_RECEIPT_ID
+tal teach SecondBrain --task "continue the knowledge capture work"
+```
+
+Corrections are exact normalized task matches only. The normalization folds
+Unicode compatibility variants and case and collapses whitespace; it does not do
+fuzzy matching. Direct aliases and other direct selectors still take precedence.
+List, inspect, or append a revocation without rewriting history:
+
+```bash
+tal teach --list
+tal teach --show FEEDBACK_ID
+tal teach --revoke FEEDBACK_ID
+tal teach --revoke FEEDBACK_ID --yes
+```
+
+The feedback history is private at
+`$XDG_DATA_HOME/terminal-agent-launcher/routing/feedback.jsonl` (or
+`~/.local/share/terminal-agent-launcher/routing/feedback.jsonl` when XDG is
+unset). Bounded route receipts are private at
+`$XDG_STATE_HOME/terminal-agent-launcher/routing/receipts.jsonl` (or
+`~/.local/state/terminal-agent-launcher/routing/receipts.jsonl`). If a taught
+project is no longer in the discovered catalog, routing stops with a stale
+correction error rather than falling back to heuristics. Restore the project to
+the configured catalog or revoke the correction with `tal teach --revoke
+FEEDBACK_ID`.
+
+## Autonomous routing research
+
+From a clean source checkout, run a bounded experiment session:
+
+```bash
+tal research --repo /absolute/path/to/terminal-agent-launcher
+```
+
+The command establishes a benchmark baseline, asks Codex for one read-only patch
+proposal at a time, and applies proposals only to
+`terminal_agent_launcher/routing.py`. A controller-owned evaluator rejects every
+confident wrong route and any regression in the holdout or private corpus. Kept
+changes must also pass the repository's full test command.
+
+The defaults are 20 experiments or 60 minutes. Work happens on an isolated
+`autoresearch/routing-*` branch. The command writes a report and JSONL ledger but
+does not merge the branch or reinstall the CLI.
+
+See [research/README.md](research/README.md) for the corpus format, private local
+cases, promotion rules, and output locations.
+
+Create an alias for a discovered project, launch it, and remove the alias:
+
+```bash
+tal alias add payments ~/Projects/vora-payments
+tal payments --agent codex
+tal "Terminal Agent Launcher" --agent claude
+tal alias remove payments
+```
+
+The launch command requires an explicit `--agent` (`claude` or `codex`). It
+detects that executable on `PATH`, runs it in the foreground, inherits the
+current terminal input/output, and uses the project's canonical directory as
+its working directory.
+
+Selectors resolve deterministically in this order:
+
+1. Exact alias.
+2. Exact canonical path.
+3. Exact project name.
+4. A unique case-insensitive partial match against project name or path.
+5. For unresolved multi-word input only, a confident local task route.
+
+An alias must point to a project returned by discovery. Missing or ambiguous
+selectors, including weak or ambiguous task routes, print ranked candidates and
+exit without launching. A stale exact alias is a terminal error and never falls
+back to task routing. The CLI never builds a shell command, and it cannot launch
+a path outside the discovered project set.
 
 ## Use
 
