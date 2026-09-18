@@ -39,7 +39,12 @@ COMMON_TERMS = frozenset(
         "the",
         "to",
         "update",
+        "want",
+        "was",
+        "which",
         "with",
+        "work",
+        "worked",
     }
 )
 _TOKEN_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|[^a-zA-Z0-9]+")

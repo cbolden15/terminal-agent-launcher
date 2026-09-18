@@ -5,7 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from terminal_agent_launcher.routing import MAX_METADATA_BYTES, build_profiles, route_task
+from terminal_agent_launcher.routing import (
+    MAX_METADATA_BYTES,
+    build_profiles,
+    route_task,
+    tokenize,
+)
 
 
 class RoutingTestCase(unittest.TestCase):
@@ -89,6 +94,14 @@ tal route "update my global Codex and Claude instructions"
 
         self.assertIsNone(evidence.project)
         self.assertEqual(evidence.candidates, ())
+
+    def test_conversational_intent_words_do_not_become_routing_evidence(self) -> None:
+        self.assertEqual(
+            tokenize(
+                "I want to work on the secondBrain, which was a project I worked on for Blockdaemon."
+            ),
+            ("second", "brain", "blockdaemon"),
+        )
 
     def test_equal_scores_are_ambiguous_and_candidates_are_deterministic(self) -> None:
         alpha = self.project("alpha")

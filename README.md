@@ -52,6 +52,12 @@ List the repositories in the CLI's local catalog:
 tal list
 ```
 
+The CLI scans configured roots to a bounded depth for Git repositories and
+non-Git projects identified by common root files such as `pyproject.toml`,
+`package.json`, `.codex-test-command`, or a README paired with agent
+instructions. Category folders remain excluded when they contain a more
+specific project.
+
 Preview a local task route without starting an agent:
 
 ```bash

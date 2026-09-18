@@ -358,6 +358,43 @@ class CliTestCase(unittest.TestCase):
         self.assertIn(str(self.launcher.resolve()), output.getvalue())
         self.assertIn("matched: launcher, terminal", output.getvalue())
 
+    def test_cli_routes_nested_non_git_secondbrain_instead_of_sibling_repository(self) -> None:
+        blockdaemon = self.root / "work" / "blockdaemon"
+        blockdaemon.mkdir(parents=True)
+        second_brain = blockdaemon / "SecondBrain"
+        second_brain.mkdir()
+        (second_brain / ".codex-test-command").write_text(
+            "python3 -m unittest", encoding="utf-8"
+        )
+        (second_brain / "README.md").write_text(
+            "SecondBrain capture for Blockdaemon", encoding="utf-8"
+        )
+        draftdaemon = blockdaemon / "draftdaemon"
+        draftdaemon.mkdir()
+        (draftdaemon / ".git").mkdir()
+        (draftdaemon / "README.md").write_text(
+            "A place where I want to work on Blockdaemon drafts", encoding="utf-8"
+        )
+        task = (
+            "I want to work on the secondBrain, which was a project I worked on "
+            "for Blockdaemon."
+        )
+
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("terminal_agent_launcher.cli.launch_project", return_value=0) as launch,
+        ):
+            self.assertEqual(
+                cli.main(
+                    ["--config", str(self.config_path), task, "--agent", "codex"]
+                ),
+                0,
+            )
+
+        self.assertEqual(launch.call_args.args[0]["path"], str(second_brain.resolve()))
+        self.assertIn("matched: brain, second, blockdaemon", output.getvalue())
+
     def test_cli_never_launches_weak_ambiguous_stale_or_unknown_tasks(self) -> None:
         weak = self.root / "weak"
         ambiguous = self.root / "ambiguous"

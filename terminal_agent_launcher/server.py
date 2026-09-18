@@ -31,6 +31,16 @@ DEFAULT_IGNORED_NAMES = {
     "node_modules",
 }
 CLI_DISCOVERY_MAX_DEPTH = 5
+CLI_STRONG_PROJECT_MARKERS = frozenset(
+    {
+        ".codex-test-command",
+        "Cargo.toml",
+        "go.mod",
+        "package.json",
+        "pyproject.toml",
+    }
+)
+CLI_AGENT_INSTRUCTION_MARKERS = frozenset({"AGENTS.md", "CLAUDE.md"})
 CLAUDE_PERMISSION_ARGUMENTS = {
     "plan": ("--permission-mode", "plan"),
     "default": ("--permission-mode", "default"),
@@ -323,6 +333,24 @@ def _cli_child_directories(path: Path, ignored_names: set[str]) -> list[Path]:
     return sorted(directories, key=lambda child: child.name.casefold())
 
 
+def _cli_project_markers(path: Path) -> tuple[bool, bool]:
+    """Return strong and weak evidence that a non-Git directory is a project."""
+    try:
+        children = [
+            child
+            for child in path.iterdir()
+            if not child.is_symlink() and child.is_file()
+        ]
+    except OSError:
+        return False, False
+
+    names = {child.name for child in children}
+    strong = bool(names & CLI_STRONG_PROJECT_MARKERS)
+    has_readme = any(name.startswith("README") for name in names)
+    weak = has_readme and bool(names & CLI_AGENT_INSTRUCTION_MARKERS)
+    return strong, weak
+
+
 def discover_cli_projects(
     config: dict[str, Any], *, max_depth: int = CLI_DISCOVERY_MAX_DEPTH
 ) -> list[dict[str, Any]]:
@@ -383,8 +411,8 @@ def discover_cli_projects(
         nested_repositories: set[Path] = set()
 
         def walk(directory: Path, depth: int) -> bool:
-            """Discover repositories below directory and report whether one exists."""
-            found_repository = False
+            """Discover project roots below directory and report whether one exists."""
+            found_project = False
             for child in _cli_child_directories(directory, ignored_names):
                 child_depth = depth + 1
                 if child_depth > max_depth:
@@ -392,11 +420,20 @@ def discover_cli_projects(
                 if _is_git_repository(child):
                     add_project(child, location_id)
                     nested_repositories.add(child)
-                    found_repository = True
+                    found_project = True
                     continue
-                if walk(child, child_depth):
-                    found_repository = True
-            return found_repository
+                strong_marker, weak_marker = _cli_project_markers(child)
+                if strong_marker:
+                    add_project(child, location_id)
+                    found_project = True
+                    continue
+                found_descendant = walk(child, child_depth)
+                if found_descendant:
+                    found_project = True
+                elif weak_marker:
+                    add_project(child, location_id)
+                    found_project = True
+            return found_project
 
         if _is_git_repository(location_path):
             add_project(location_path, location_id)

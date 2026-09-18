@@ -120,6 +120,34 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertNotIn("oss", [project["name"] for project in projects])
         self.assertNotIn("worktrees", [project["name"] for project in projects])
 
+    def test_catalogs_nested_non_git_project_without_listing_its_internal_folders(self) -> None:
+        category = self.root / "work" / "blockdaemon"
+        category.mkdir(parents=True)
+        (category / "AGENTS.md").write_text("Category instructions", encoding="utf-8")
+        project = category / "SecondBrain"
+        project.mkdir()
+        (project / ".codex-test-command").write_text("make test", encoding="utf-8")
+        (project / "README.md").write_text("SecondBrain capture", encoding="utf-8")
+        (project / "scripts").mkdir()
+
+        projects = discover_cli_projects(self.config())
+
+        self.assertEqual([candidate["name"] for candidate in projects], ["SecondBrain"])
+        self.assertFalse(projects[0]["is_git"])
+
+    def test_weak_category_marker_yields_to_nested_repository(self) -> None:
+        category = self.root / "category"
+        category.mkdir()
+        (category / "README.md").write_text("Project collection", encoding="utf-8")
+        (category / "CLAUDE.md").write_text("Category instructions", encoding="utf-8")
+        repository = category / "actual-project"
+        repository.mkdir()
+        (repository / ".git").mkdir()
+
+        projects = discover_cli_projects(self.config())
+
+        self.assertEqual([candidate["name"] for candidate in projects], ["actual-project"])
+
     def test_honors_maximum_depth_and_prunes_ignored_and_symlinked_directories(self) -> None:
         within_depth = self.root / "one" / "two" / "three"
         within_depth.mkdir(parents=True)
