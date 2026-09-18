@@ -94,6 +94,7 @@ def default_config() -> dict[str, Any]:
             }
         ],
         "ignored_names": sorted(DEFAULT_IGNORED_NAMES),
+        "aliases": {},
     }
 
 
@@ -149,6 +150,14 @@ def load_config(
     ):
         raise ConfigError("Configuration ignored_names must be a list of strings.")
     config["ignored_names"] = ignored_names
+
+    aliases = config.get("aliases", {})
+    if not isinstance(aliases, dict) or not all(
+        isinstance(alias, str) and isinstance(target, str)
+        for alias, target in aliases.items()
+    ):
+        raise ConfigError("Configuration aliases must be an object of strings.")
+    config["aliases"] = aliases
 
     normalized_locations: list[dict[str, str]] = []
     for location in config["locations"]:

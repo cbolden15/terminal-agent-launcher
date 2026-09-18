@@ -99,9 +99,16 @@ class FolderDiscoveryTests(unittest.TestCase):
 
         migrated = load_config(canonical, legacy)
 
-        self.assertEqual(migrated, original)
-        self.assertEqual(load_config(canonical), original)
+        expected = {**original, "aliases": {}}
+        self.assertEqual(migrated, expected)
+        self.assertEqual(load_config(canonical), expected)
         self.assertTrue(legacy.exists())
+
+    def test_old_configuration_gets_an_empty_aliases_object(self) -> None:
+        path = self.base / "config.json"
+        path.write_text(json.dumps(self.config()), encoding="utf-8")
+
+        self.assertEqual(load_config(path)["aliases"], {})
 
     def test_canonical_config_wins_when_both_configs_exist(self) -> None:
         canonical = self.base / "new" / "config.json"
@@ -113,7 +120,9 @@ class FolderDiscoveryTests(unittest.TestCase):
         save_config(canonical_config, canonical)
         save_config(legacy_config, legacy)
 
-        self.assertEqual(load_config(canonical, legacy), canonical_config)
+        self.assertEqual(
+            load_config(canonical, legacy), {**canonical_config, "aliases": {}}
+        )
 
     def test_malformed_legacy_config_is_not_replaced_with_defaults(self) -> None:
         canonical = self.base / "new" / "config.json"

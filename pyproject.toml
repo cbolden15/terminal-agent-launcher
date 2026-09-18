@@ -23,6 +23,7 @@ classifiers = [
 
 [project.scripts]
 terminal-agent-launcher = "terminal_agent_launcher.__main__:main"
+tal = "terminal_agent_launcher.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/cbolden15/terminal-agent-launcher"
