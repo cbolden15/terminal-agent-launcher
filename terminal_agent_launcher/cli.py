@@ -19,6 +19,13 @@ from .server import (
     save_config,
 )
 from .routing import RoutingEvidence, route_task
+from .research import (
+    DEFAULT_MAX_EXPERIMENTS,
+    DEFAULT_MAX_MINUTES,
+    ResearchError,
+    provider_names,
+    run_research,
+)
 
 
 class SelectorError(ConfigError):
@@ -195,9 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
             "  tal route TASK\n"
             "  tal route TASK --agent claude|codex\n"
             "  tal PROJECT --agent claude|codex\n"
+            "  tal research [--provider codex]\n"
             "\n"
             "Unresolved multi-word PROJECT values are routed locally using "
-            "repository names, paths, and bounded local metadata."
+            "repository names, paths, and bounded local metadata. Research "
+            "runs are explicit, bounded, and isolated from the installed router."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -205,6 +214,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", type=Path, default=DEFAULT_CONFIG_PATH, help="Configuration file."
     )
     parser.add_argument("--agent", choices=("claude", "codex"))
+    parser.add_argument("--provider", choices=provider_names(), default="codex")
+    parser.add_argument("--repo", type=Path, help="Source checkout used by tal research.")
+    parser.add_argument(
+        "--private-corpus",
+        type=Path,
+        help="Optional private routing JSONL corpus used only by the evaluator.",
+    )
+    parser.add_argument(
+        "--max-experiments",
+        type=int,
+        default=DEFAULT_MAX_EXPERIMENTS,
+        help=f"Maximum research proposals (default: {DEFAULT_MAX_EXPERIMENTS}).",
+    )
+    parser.add_argument(
+        "--max-minutes",
+        type=float,
+        default=DEFAULT_MAX_MINUTES,
+        help=f"Research wall-clock limit (default: {DEFAULT_MAX_MINUTES:g}).",
+    )
     parser.add_argument("arguments", nargs="*", metavar="COMMAND")
     return parser
 
@@ -241,6 +269,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = args.arguments
 
     try:
+        if arguments == ["research"]:
+            if args.agent is not None:
+                raise ConfigError("--agent is not valid for tal research; use --provider.")
+            result = run_research(
+                repository=args.repo,
+                provider_name=args.provider,
+                max_experiments=args.max_experiments,
+                max_minutes=args.max_minutes,
+                private_corpus=args.private_corpus,
+            )
+            print(f"Candidate branch: {result.branch}")
+            print(f"Kept: {result.kept_experiments}/{result.experiments_run} experiments")
+            print(f"Report: {result.report_path}")
+            return 0
+
+        research_options_used = (
+            args.repo is not None
+            or args.private_corpus is not None
+            or args.provider != "codex"
+            or args.max_experiments != DEFAULT_MAX_EXPERIMENTS
+            or args.max_minutes != DEFAULT_MAX_MINUTES
+        )
+        if research_options_used:
+            raise ConfigError("Research options are only valid with 'tal research'.")
+
         config = load_config(args.config)
         projects = discover_cli_projects(config)
 
@@ -287,7 +340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if evidence is not None:
             _print_route(evidence)
         return launch_project(project, args.agent)
-    except ConfigError as exc:
+    except (ConfigError, ResearchError) as exc:
         print(f"tal: {exc}", file=sys.stderr)
         return 2
 

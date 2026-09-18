@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Terminal Agent Launcher routing experiment proposal",
+  "type": "object",
+  "properties": {
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "patch": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": ["description", "patch"],
+  "additionalProperties": false
+}

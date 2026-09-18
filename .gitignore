@@ -13,3 +13,4 @@ coverage/
 .agent-launchpad-test/
 .codegraph/
 docs/ai/workstreams/
+research/routing_cases.private.jsonl

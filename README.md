@@ -78,6 +78,27 @@ bounded local metadata, makes no network requests or API calls, and uses zero
 model tokens. Before launching a task route, `tal` prints the selected canonical
 repository, score, confidence margin, and strongest matched terms.
 
+## Autonomous routing research
+
+From a clean source checkout, run a bounded experiment session:
+
+```bash
+tal research --repo /absolute/path/to/terminal-agent-launcher
+```
+
+The command establishes a benchmark baseline, asks Codex for one read-only patch
+proposal at a time, and applies proposals only to
+`terminal_agent_launcher/routing.py`. A controller-owned evaluator rejects every
+confident wrong route and any regression in the holdout or private corpus. Kept
+changes must also pass the repository's full test command.
+
+The defaults are 20 experiments or 60 minutes. Work happens on an isolated
+`autoresearch/routing-*` branch. The command writes a report and JSONL ledger but
+does not merge the branch or reinstall the CLI.
+
+See [research/README.md](research/README.md) for the corpus format, private local
+cases, promotion rules, and output locations.
+
 Create an alias for a discovered project, launch it, and remove the alias:
 
 ```bash
