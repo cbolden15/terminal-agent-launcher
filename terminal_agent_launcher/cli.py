@@ -130,7 +130,10 @@ def detect_agent(agent: str) -> str:
     executable = shutil.which(agent)
     if executable is None:
         raise AgentNotFoundError(f"{agent} was not found on PATH.")
-    return executable
+    try:
+        return str(Path(executable).resolve(strict=True))
+    except OSError as exc:
+        raise AgentNotFoundError(f"{agent} was not found on PATH.") from exc
 
 
 def launch_project(project: dict[str, Any], agent: str) -> int:
@@ -169,9 +172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         config = load_config(args.config)
         projects = discover_projects(config)
 
-        if arguments == ["list"]:
-            if args.agent:
-                raise ConfigError("--agent is only valid when launching a project.")
+        if arguments == ["list"] and args.agent is None:
             _list_projects(projects)
             return 0
 

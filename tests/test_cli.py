@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -23,6 +24,8 @@ class CliTestCase(unittest.TestCase):
         self.payments_worker.mkdir()
         self.launcher = self.root / "Terminal Agent Launcher"
         self.launcher.mkdir()
+        self.list_project = self.root / "list"
+        self.list_project.mkdir()
         self.config_path = self.base / "config.json"
         save_config(
             {
@@ -41,6 +44,7 @@ class CliTestCase(unittest.TestCase):
             {"name": "Payments API", "path": str(self.payments.resolve())},
             {"name": "Payments Worker", "path": str(self.payments_worker.resolve())},
             {"name": "Terminal Agent Launcher", "path": str(self.launcher.resolve())},
+            {"name": "list", "path": str(self.list_project.resolve())},
         ]
 
     def test_resolver_precedence_is_alias_path_name_then_partial(self) -> None:
@@ -85,13 +89,25 @@ class CliTestCase(unittest.TestCase):
             cli.remove_alias(config, "payments")
 
     def test_detect_agent_only_accepts_detected_supported_commands(self) -> None:
-        with patch("terminal_agent_launcher.cli.shutil.which", return_value="/bin/codex"):
-            self.assertEqual(cli.detect_agent("codex"), "/bin/codex")
+        executable = str(Path(__file__).resolve())
+        with patch("terminal_agent_launcher.cli.shutil.which", return_value=executable):
+            self.assertEqual(cli.detect_agent("codex"), executable)
         with patch("terminal_agent_launcher.cli.shutil.which", return_value=None):
             with self.assertRaisesRegex(cli.AgentNotFoundError, "not found"):
                 cli.detect_agent("claude")
         with self.assertRaisesRegex(ConfigError, "claude or codex"):
             cli.detect_agent("other")
+
+    def test_detect_agent_resolves_relative_path_results_before_launch(self) -> None:
+        executable = self.base / "bin" / "codex"
+        executable.parent.mkdir()
+        executable.touch()
+        relative_executable = os.path.relpath(executable, Path.cwd())
+
+        with patch(
+            "terminal_agent_launcher.cli.shutil.which", return_value=relative_executable
+        ):
+            self.assertEqual(cli.detect_agent("codex"), str(executable.resolve()))
 
     def test_foreground_launch_uses_literal_argument_vector_and_project_cwd(self) -> None:
         completed = Mock(returncode=23)
@@ -137,6 +153,24 @@ class CliTestCase(unittest.TestCase):
             f"Terminal Agent Launcher\t{self.launcher.resolve()}", output.getvalue()
         )
 
+    def test_cli_explicit_agent_disambiguates_list_project_and_alias(self) -> None:
+        with patch("terminal_agent_launcher.cli.launch_project", return_value=0) as launch:
+            self.assertEqual(
+                cli.main(["--config", str(self.config_path), "list", "--agent", "codex"]),
+                0,
+            )
+        self.assertEqual(launch.call_args.args[0]["path"], str(self.list_project.resolve()))
+
+        config = load_config(self.config_path)
+        config["aliases"]["list"] = str(self.payments.resolve())
+        save_config(config, self.config_path)
+        with patch("terminal_agent_launcher.cli.launch_project", return_value=0) as launch:
+            self.assertEqual(
+                cli.main(["--config", str(self.config_path), "list", "--agent", "codex"]),
+                0,
+            )
+        self.assertEqual(launch.call_args.args[0]["path"], str(self.payments.resolve()))
+
     def test_cli_rejects_missing_agent_and_unknown_selector_without_launching(self) -> None:
         errors = io.StringIO()
         with redirect_stderr(errors):
@@ -153,6 +187,54 @@ class CliTestCase(unittest.TestCase):
         self.assertIn("requires --agent", errors.getvalue())
         self.assertIn("No project matches", errors.getvalue())
         self.assertIn("codex was not found", errors.getvalue())
+
+    def test_cli_never_launches_unknown_ambiguous_or_stale_selectors(self) -> None:
+        config = load_config(self.config_path)
+        config["aliases"]["stale"] = "/missing"
+        save_config(config, self.config_path)
+
+        errors = io.StringIO()
+        with (
+            redirect_stderr(errors),
+            patch("terminal_agent_launcher.cli.launch_project") as launch,
+        ):
+            self.assertEqual(
+                cli.main(["--config", str(self.config_path), "missing", "--agent", "codex"]),
+                2,
+            )
+            self.assertEqual(
+                cli.main(["--config", str(self.config_path), "payments", "--agent", "codex"]),
+                2,
+            )
+            self.assertEqual(
+                cli.main(["--config", str(self.config_path), "stale", "--agent", "codex"]),
+                2,
+            )
+
+        launch.assert_not_called()
+        self.assertIn("No project matches", errors.getvalue())
+        self.assertIn("Ambiguous project", errors.getvalue())
+        self.assertIn("Alias 'stale' is stale", errors.getvalue())
+
+    def test_cli_reports_launch_oserror_without_traceback(self) -> None:
+        errors = io.StringIO()
+        with (
+            redirect_stderr(errors),
+            patch("terminal_agent_launcher.cli.detect_agent", return_value="/bin/codex"),
+            patch(
+                "terminal_agent_launcher.cli.subprocess.run",
+                side_effect=OSError("permission denied"),
+            ),
+        ):
+            self.assertEqual(
+                cli.main(
+                    ["--config", str(self.config_path), "Payments API", "--agent", "codex"]
+                ),
+                2,
+            )
+
+        self.assertIn("tal: Could not start codex: permission denied", errors.getvalue())
+        self.assertNotIn("Traceback", errors.getvalue())
 
 
 if __name__ == "__main__":
