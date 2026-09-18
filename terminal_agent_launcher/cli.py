@@ -184,7 +184,22 @@ def launch_project(project: dict[str, Any], agent: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="tal", description="Launch Claude Code or Codex in a configured project."
+        prog="tal",
+        description=(
+            "Launch Claude Code or Codex in a configured project, or route a "
+            "task locally without model tokens."
+        ),
+        epilog=(
+            "Commands:\n"
+            "  tal list\n"
+            "  tal route TASK\n"
+            "  tal route TASK --agent claude|codex\n"
+            "  tal PROJECT --agent claude|codex\n"
+            "\n"
+            "Unresolved multi-word PROJECT values are routed locally using "
+            "repository names, paths, and bounded local metadata."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--config", type=Path, default=DEFAULT_CONFIG_PATH, help="Configuration file."
@@ -215,7 +230,8 @@ def _print_route(evidence: RoutingEvidence) -> None:
     print(f"{evidence.project['name']}\t{evidence.project['path']}")
     print(
         f"Score: {evidence.score:.2f}; margin: {evidence.confidence_margin:.2f}; "
-        f"matched: {', '.join(evidence.strongest_terms)}"
+        f"matched: {', '.join(evidence.strongest_terms)}",
+        flush=True,
     )
 
 
@@ -255,8 +271,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             evidence = route_task(task, projects, routing_roots)
             if evidence.project is None:
                 raise _routing_error(task, evidence)
+            _print_route(evidence)
             if args.agent is None:
-                _print_route(evidence)
                 return 0
             return launch_project(evidence.project, args.agent)
 
@@ -265,9 +281,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.agent is None:
             raise ConfigError("Launching a project requires --agent claude or codex.")
         selector = " ".join(arguments)
-        project, _ = resolve_task(
+        project, evidence = resolve_task(
             selector, projects, config["aliases"], routing_roots
         )
+        if evidence is not None:
+            _print_route(evidence)
         return launch_project(project, args.agent)
     except ConfigError as exc:
         print(f"tal: {exc}", file=sys.stderr)

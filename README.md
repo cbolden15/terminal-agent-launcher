@@ -46,11 +46,31 @@ portable foreground command and does not open iTerm2.
 
 ## Portable CLI
 
-List the projects returned by the existing configuration and discovery rules:
+List the repositories in the CLI's local catalog:
 
 ```bash
 tal list
 ```
+
+Preview a local task route without starting an agent:
+
+```bash
+tal route "update my global Codex and Claude instructions"
+# agent-config    /Users/calebbolden/Projects/agent-config
+```
+
+Add `--agent` to launch the selected repository, or pass unresolved multi-word
+task text directly to `tal`:
+
+```bash
+tal route "change Terminal Agent Launcher project routing" --agent codex
+tal "change Terminal Agent Launcher project routing" --agent codex
+```
+
+Task routing is deterministic and local. It reads the repository catalog plus
+bounded local metadata, makes no network requests or API calls, and uses zero
+model tokens. Before launching a task route, `tal` prints the selected canonical
+repository, score, confidence margin, and strongest matched terms.
 
 Create an alias for a discovered project, launch it, and remove the alias:
 
@@ -72,11 +92,13 @@ Selectors resolve deterministically in this order:
 2. Exact canonical path.
 3. Exact project name.
 4. A unique case-insensitive partial match against project name or path.
+5. For unresolved multi-word input only, a confident local task route.
 
 An alias must point to a project returned by discovery. Missing or ambiguous
-selectors print available candidates and exit without launching. The CLI never
-builds a shell command, and it cannot launch a path outside the discovered
-project set.
+selectors, including weak or ambiguous task routes, print ranked candidates and
+exit without launching. A stale exact alias is a terminal error and never falls
+back to task routing. The CLI never builds a shell command, and it cannot launch
+a path outside the discovered project set.
 
 ## Use
 

@@ -305,6 +305,127 @@ class CliTestCase(unittest.TestCase):
         self.assertIn(str(self.launcher.resolve()), output.getvalue())
         self.assertIn("matched: launcher, terminal", output.getvalue())
 
+    def test_cli_route_launch_prints_evidence_before_launching(self) -> None:
+        (self.launcher / "README.md").write_text(
+            "Terminal Agent Launcher project routing", encoding="utf-8"
+        )
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("terminal_agent_launcher.cli.launch_project", return_value=0) as launch,
+        ):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "route",
+                        "change Terminal Agent Launcher project routing",
+                        "--agent",
+                        "codex",
+                    ]
+                ),
+                0,
+            )
+
+        self.assertEqual(launch.call_args.args[0]["path"], str(self.launcher.resolve()))
+        self.assertIn(str(self.launcher.resolve()), output.getvalue())
+        self.assertIn("matched: launcher, terminal", output.getvalue())
+
+    def test_cli_task_route_launch_prints_evidence_before_launching(self) -> None:
+        (self.launcher / "README.md").write_text(
+            "Terminal Agent Launcher project routing", encoding="utf-8"
+        )
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("terminal_agent_launcher.cli.launch_project", return_value=0) as launch,
+        ):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "change Terminal Agent Launcher project routing",
+                        "--agent",
+                        "codex",
+                    ]
+                ),
+                0,
+            )
+
+        self.assertEqual(launch.call_args.args[0]["path"], str(self.launcher.resolve()))
+        self.assertIn(str(self.launcher.resolve()), output.getvalue())
+        self.assertIn("matched: launcher, terminal", output.getvalue())
+
+    def test_cli_never_launches_weak_ambiguous_stale_or_unknown_tasks(self) -> None:
+        weak = self.root / "weak"
+        ambiguous = self.root / "ambiguous"
+        weak.mkdir()
+        ambiguous.mkdir()
+        (weak / "README.md").write_text("raritytoken", encoding="utf-8")
+        (self.payments / "README.md").write_text(
+            "sharedphrase crossterm", encoding="utf-8"
+        )
+        (self.payments_worker / "README.md").write_text(
+            "sharedphrase crossterm", encoding="utf-8"
+        )
+        config = load_config(self.config_path)
+        config["aliases"]["stale task"] = "/missing"
+        save_config(config, self.config_path)
+
+        errors = io.StringIO()
+        with (
+            redirect_stderr(errors),
+            patch("terminal_agent_launcher.cli.launch_project") as launch,
+        ):
+            self.assertEqual(
+                cli.main(
+                    ["--config", str(self.config_path), "find raritytoken", "--agent", "codex"]
+                ),
+                2,
+            )
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "sharedphrase crossterm",
+                        "--agent",
+                        "codex",
+                    ]
+                ),
+                2,
+            )
+            self.assertEqual(
+                cli.main(
+                    ["--config", str(self.config_path), "stale task", "--agent", "codex"]
+                ),
+                2,
+            )
+            self.assertEqual(
+                cli.main(
+                    ["--config", str(self.config_path), "unknown task", "--agent", "codex"]
+                ),
+                2,
+            )
+
+        launch.assert_not_called()
+        self.assertIn("Candidates: weak", errors.getvalue())
+        self.assertIn("Candidates: Payments API", errors.getvalue())
+        self.assertIn("Alias 'stale task' is stale", errors.getvalue())
+        self.assertIn("Candidates: none", errors.getvalue())
+
+    def test_help_describes_local_zero_token_task_routing(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            with self.assertRaises(SystemExit) as exit_context:
+                cli.main(["--help"])
+
+        self.assertEqual(exit_context.exception.code, 0)
+        self.assertIn("locally without model tokens", output.getvalue())
+        self.assertIn("tal route TASK", output.getvalue())
+
     def test_cli_reports_launch_oserror_without_traceback(self) -> None:
         errors = io.StringIO()
         with (
