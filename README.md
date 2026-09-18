@@ -1,19 +1,21 @@
 # Terminal Agent Launcher
 
-Terminal Agent Launcher is a local macOS project browser for starting Claude Code and Codex sessions in iTerm2. Pick a folder, choose a permission level, and open the session in a new tab or window.
+Terminal Agent Launcher includes a portable foreground CLI for starting Claude Code and Codex sessions in a configured project, plus a local macOS project browser for starting sessions in iTerm2.
 
 It runs on your Mac with no account, analytics, cloud service, or API keys.
 
 ## Requirements
 
-- macOS with iTerm2 installed in `/Applications`
 - Python 3.9 or newer
 - Claude Code, Codex CLI, or both available on your shell `PATH`
-- A modern browser with JavaScript enabled
+
+The `tal` CLI core is portable across platforms. The browser launcher and its
+iTerm2 integration remain macOS-only and require iTerm2 installed in
+`/Applications`, plus a modern browser with JavaScript enabled.
 
 ## Install
 
-Clone the repository and install the login service:
+Clone the repository. On macOS, install the browser service with:
 
 ```bash
 git clone https://github.com/cbolden15/terminal-agent-launcher.git
@@ -21,14 +23,60 @@ cd terminal-agent-launcher
 make install
 ```
 
-The installer starts a localhost service and opens [http://127.0.0.1:4317](http://127.0.0.1:4317). It will start automatically when you log in.
-
-You can also install the command with `pipx`:
+On macOS, `make install` installs the login service, starts the localhost
+browser at [http://127.0.0.1:4317](http://127.0.0.1:4317), and configures it
+to start automatically when you log in. To install the commands on your
+`PATH`, use `pipx`:
 
 ```bash
 pipx install git+https://github.com/cbolden15/terminal-agent-launcher.git
-terminal-agent-launcher install
 ```
+
+For a local checkout, use `python3 -m pip install --editable .` instead.
+
+The package provides both commands:
+
+```bash
+terminal-agent-launcher install
+tal --help
+```
+
+`terminal-agent-launcher` remains the browser/service command. `tal` is the
+portable foreground command and does not open iTerm2.
+
+## Portable CLI
+
+List the projects returned by the existing configuration and discovery rules:
+
+```bash
+tal list
+```
+
+Create an alias for a discovered project, launch it, and remove the alias:
+
+```bash
+tal alias add payments ~/Projects/vora-payments
+tal payments --agent codex
+tal "Terminal Agent Launcher" --agent claude
+tal alias remove payments
+```
+
+The launch command requires an explicit `--agent` (`claude` or `codex`). It
+detects that executable on `PATH`, runs it in the foreground, inherits the
+current terminal input/output, and uses the project's canonical directory as
+its working directory.
+
+Selectors resolve deterministically in this order:
+
+1. Exact alias.
+2. Exact canonical path.
+3. Exact project name.
+4. A unique case-insensitive partial match against project name or path.
+
+An alias must point to a project returned by discovery. Missing or ambiguous
+selectors print available candidates and exit without launching. The CLI never
+builds a shell command, and it cannot launch a path outside the discovered
+project set.
 
 ## Use
 
