@@ -9,6 +9,17 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+from .feedback import (
+    FeedbackCorrection,
+    FeedbackError,
+    FeedbackStore,
+    ReceiptStore,
+    active_corrections_by_fingerprint,
+    make_route_receipt,
+    project_identity,
+    task_fingerprint_v1,
+    terminal_identity,
+)
 from .server import (
     DEFAULT_CONFIG_PATH,
     ConfigError,
@@ -34,6 +45,10 @@ class SelectorError(ConfigError):
 
 class UnknownSelectorError(SelectorError):
     """Raised when direct selector resolution found no possible project."""
+
+
+class StaleCorrectionError(SelectorError):
+    """Raised when an exact taught correction no longer has one catalog target."""
 
 
 class AgentNotFoundError(ConfigError):
@@ -121,18 +136,72 @@ def _routing_error(task: str, evidence: RoutingEvidence) -> SelectorError:
     )
 
 
+def _canonical_project_path(project: dict[str, Any]) -> str:
+    path = project.get("path")
+    if not isinstance(path, str) or not path:
+        raise StaleCorrectionError("Taught correction has an invalid project path.")
+    try:
+        return str(canonical_path(Path(path), strict=True))
+    except OSError as exc:
+        raise StaleCorrectionError(
+            f"Taught correction target is stale: {path} is no longer available."
+        ) from exc
+
+
+def _resolve_taught_correction(
+    task: str,
+    projects: Sequence[dict[str, Any]],
+    corrections: Sequence[FeedbackCorrection],
+) -> dict[str, Any] | None:
+    """Resolve one exact correction, rejecting missing or ambiguous catalog targets."""
+    matches = active_corrections_by_fingerprint(
+        {correction.feedback_id: correction for correction in corrections}
+    ).get(task_fingerprint_v1(task), ())
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise StaleCorrectionError(
+            f"Taught correction for '{task}' is ambiguous; revoke conflicting corrections."
+        )
+
+    expected = matches[0].expected_project
+    expected_path = _canonical_project_path(expected)
+    matching_ids = [
+        project for project in projects if project_identity(project)["id"] == expected["id"]
+    ]
+    matching_paths = [
+        project for project in projects if _canonical_project_path(project) == expected_path
+    ]
+    if len(matching_ids) > 1 or len(matching_paths) > 1:
+        raise StaleCorrectionError(
+            f"Taught correction for '{task}' has an ambiguous catalog target."
+        )
+    if len(matching_ids) != 1 or len(matching_paths) != 1 or matching_ids[0] is not matching_paths[0]:
+        raise StaleCorrectionError(
+            f"Taught correction for '{task}' is stale: expected project "
+            f"{expected['name']} ({expected_path}) is no longer in the catalog."
+        )
+    return matching_ids[0]
+
+
 def resolve_task(
     task: str,
     projects: Sequence[dict[str, Any]],
     aliases: dict[str, str] | None = None,
     routing_roots: Sequence[Path | str] = (),
+    feedback_store: FeedbackStore | None = None,
 ) -> tuple[dict[str, Any], RoutingEvidence | None]:
-    """Resolve direct selectors first, then route only unresolved task text."""
+    """Resolve direct selectors, exact corrections, then unresolved task text."""
     try:
         return resolve_project(task, projects, aliases), None
     except UnknownSelectorError:
         if len(task.split()) < 2:
             raise
+
+    corrections = (feedback_store or FeedbackStore()).active_corrections()
+    taught_project = _resolve_taught_correction(task, projects, tuple(corrections.values()))
+    if taught_project is not None:
+        return taught_project, None
 
     evidence = route_task(task, projects, routing_roots)
     if evidence.project is None:
@@ -263,6 +332,43 @@ def _print_route(evidence: RoutingEvidence) -> None:
     )
 
 
+def _receipt_evidence(evidence: RoutingEvidence) -> dict[str, Any]:
+    return {
+        "score": evidence.score,
+        "margin": evidence.confidence_margin,
+        "matched_terms": list(evidence.strongest_terms),
+        "candidates": [
+            {
+                "project_id": candidate.project.get("id"),
+                "score": candidate.score,
+                "matched_terms": list(candidate.strongest_terms),
+            }
+            for candidate in evidence.candidates[:3]
+        ],
+    }
+
+
+def _record_route_receipt(
+    task: str,
+    project: dict[str, Any],
+    evidence: RoutingEvidence | None,
+    receipt_store: ReceiptStore | None = None,
+) -> None:
+    """Persist heuristic route evidence before previewing or launching it."""
+    if evidence is None:
+        return
+    terminal = terminal_identity()
+    if terminal is None:
+        return
+    receipt = make_route_receipt(
+        task,
+        project,
+        _receipt_evidence(evidence),
+        terminal_id=terminal,
+    )
+    (receipt_store or ReceiptStore()).record(receipt)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -321,13 +427,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         routing_roots = _routing_roots(config)
         if len(arguments) >= 2 and arguments[0] == "route":
             task = " ".join(arguments[1:])
-            evidence = route_task(task, projects, routing_roots)
-            if evidence.project is None:
-                raise _routing_error(task, evidence)
-            _print_route(evidence)
+            project, evidence = resolve_task(
+                task, projects, config["aliases"], routing_roots
+            )
+            _record_route_receipt(task, project, evidence)
+            if evidence is not None:
+                _print_route(evidence)
+            else:
+                print(f"{project['name']}\t{project['path']}")
             if args.agent is None:
                 return 0
-            return launch_project(evidence.project, args.agent)
+            return launch_project(project, args.agent)
 
         if not arguments:
             raise ConfigError("Usage: tal list | tal route TASK | tal PROJECT --agent claude|codex")
@@ -337,10 +447,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         project, evidence = resolve_task(
             selector, projects, config["aliases"], routing_roots
         )
+        _record_route_receipt(selector, project, evidence)
         if evidence is not None:
             _print_route(evidence)
         return launch_project(project, args.agent)
-    except (ConfigError, ResearchError) as exc:
+    except (ConfigError, FeedbackError, ResearchError) as exc:
         print(f"tal: {exc}", file=sys.stderr)
         return 2
 

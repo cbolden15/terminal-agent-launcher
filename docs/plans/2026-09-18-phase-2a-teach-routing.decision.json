@@ -1,7 +1,7 @@
 {
   "id": "2026-09-18-phase-2a-teach-routing-notes",
   "title": "Implementation notes — Milestone 2A teach and exact routing corrections",
-  "subtitle": "starting · 2026-09-18 16:23 CDT",
+  "subtitle": "phase 2 of 3 implemented · 2026-09-18 16:45 CDT",
   "introTitle": "How to use",
   "intro": "<p>Each item is a decision, deviation, or tradeoff made during implementation. <strong>Acknowledge</strong> if fine. <strong>Discuss</strong> to write what should change. <strong>Revert</strong> to flag for undo.</p>",
   "actions": ["acknowledge", "discuss", "revert"],
@@ -10,5 +10,42 @@
     {"id": "phase-2", "label": "Phase 2 — exact override routing", "badge": "P2"},
     {"id": "phase-3", "label": "Phase 3 — teach CLI and verification", "badge": "P3"}
   ],
-  "items": []
+  "items": [
+    {
+      "id": "N1",
+      "group": "phase-1",
+      "title": "Bound route history to 100 receipts",
+      "where": "terminal_agent_launcher/feedback.py",
+      "default": "acknowledge",
+      "body": {
+        "Spec said": "Route receipts must be bounded, without selecting a count.",
+        "What I did": "Keep the newest 100 receipts in the private state file.",
+        "Why": "This is enough recent history for correction workflows while keeping every rewrite small."
+      }
+    },
+    {
+      "id": "N2",
+      "group": "phase-1",
+      "title": "Research test exposed bytecode-sensitive hygiene",
+      "where": "tests/test_research.py:test_bounded_run_keeps_an_improvement_on_a_candidate_branch",
+      "default": "discuss",
+      "body": {
+        "What I did": "Kept Phase 1 scoped to feedback storage; the required gate passed on its subsequent clean run.",
+        "Why": "The first full-suite run created an untracked __pycache__ inside a temporary research worktree, which the patch allowlist rejected.",
+        "Risk": "The research test can depend on whether Python bytecode already exists and should be hardened before release."
+      }
+    },
+    {
+      "id": "N3",
+      "group": "phase-2",
+      "title": "Use the discovery-compatible fallback project identity",
+      "where": "terminal_agent_launcher/feedback.py",
+      "default": "acknowledge",
+      "body": {
+        "Spec said": "Resolve taught targets by stable project identity and canonical path.",
+        "What I did": "Made the fallback identity use the same deterministic 16-character SHA-256 value as project discovery.",
+        "Why": "A correction captured from a project mapping without an explicit ID now resolves identically when the live catalog supplies its discovery ID."
+      }
+    }
+  ]
 }

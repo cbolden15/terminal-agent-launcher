@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from terminal_agent_launcher import cli
+from terminal_agent_launcher.feedback import FeedbackStore, ReceiptStore
 from terminal_agent_launcher.server import ConfigError, load_config, save_config
 
 
@@ -27,6 +28,14 @@ class CliTestCase(unittest.TestCase):
         self.list_project = self.root / "list"
         self.list_project.mkdir()
         self.config_path = self.base / "config.json"
+        self.environment = patch.dict(
+            os.environ,
+            {
+                "XDG_DATA_HOME": str(self.base / "data"),
+                "XDG_STATE_HOME": str(self.base / "state"),
+            },
+        )
+        self.environment.start()
         save_config(
             {
                 "locations": [{"path": str(self.root), "kind": "root"}],
@@ -37,6 +46,7 @@ class CliTestCase(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        self.environment.stop()
         self.temporary_directory.cleanup()
 
     def projects(self) -> list[dict]:
@@ -46,6 +56,12 @@ class CliTestCase(unittest.TestCase):
             {"name": "Terminal Agent Launcher", "path": str(self.launcher.resolve())},
             {"name": "list", "path": str(self.list_project.resolve())},
         ]
+
+    def feedback_store(self) -> FeedbackStore:
+        return FeedbackStore(self.base / "data" / "terminal-agent-launcher" / "routing" / "feedback.jsonl")
+
+    def receipt_store(self) -> ReceiptStore:
+        return ReceiptStore(self.base / "state" / "terminal-agent-launcher" / "routing" / "receipts.jsonl")
 
     def test_resolver_precedence_is_alias_path_name_then_partial(self) -> None:
         projects = self.projects()
@@ -357,6 +373,125 @@ class CliTestCase(unittest.TestCase):
         self.assertEqual(launch.call_args.args[0]["path"], str(self.launcher.resolve()))
         self.assertIn(str(self.launcher.resolve()), output.getvalue())
         self.assertIn("matched: launcher, terminal", output.getvalue())
+
+    def test_taught_exact_task_overrides_routing_in_preview_and_launch_without_provider_calls(self) -> None:
+        task = "fix payments api authorization"
+        store = self.feedback_store()
+        store.append_teach(task, self.projects()[2], event_id="teach-launcher")
+        output = io.StringIO()
+
+        with (
+            redirect_stdout(output),
+            patch("terminal_agent_launcher.cli.FeedbackStore", return_value=store),
+            patch("terminal_agent_launcher.cli.route_task") as route,
+            patch("terminal_agent_launcher.cli.run_research") as provider,
+            patch("terminal_agent_launcher.cli.launch_project", return_value=0) as launch,
+        ):
+            self.assertEqual(
+                cli.main(["--config", str(self.config_path), "route", task]),
+                0,
+            )
+            self.assertEqual(
+                cli.main(["--config", str(self.config_path), task, "--agent", "codex"]),
+                0,
+            )
+
+        self.assertEqual(launch.call_args.args[0]["path"], str(self.launcher.resolve()))
+        self.assertIn(str(self.launcher.resolve()), output.getvalue())
+        route.assert_not_called()
+        provider.assert_not_called()
+
+    def test_similar_untaught_task_uses_the_heuristic_router(self) -> None:
+        store = self.feedback_store()
+        store.append_teach("fix payments api", self.projects()[2], event_id="teach-launcher")
+
+        with patch("terminal_agent_launcher.cli.route_task", wraps=cli.route_task) as route:
+            project, evidence = cli.resolve_task(
+                "fix payments api authorization",
+                self.projects(),
+                routing_roots=(self.root,),
+                feedback_store=store,
+            )
+
+        self.assertEqual(project["path"], str(self.payments.resolve()))
+        self.assertIsNotNone(evidence)
+        route.assert_called_once()
+
+    def test_direct_alias_retains_precedence_over_taught_task(self) -> None:
+        task = "fix payments api authorization"
+        store = self.feedback_store()
+        store.append_teach(task, self.projects()[2], event_id="teach-launcher")
+
+        with patch("terminal_agent_launcher.cli.route_task") as route:
+            project, evidence = cli.resolve_task(
+                task,
+                self.projects(),
+                {task: str(self.payments.resolve())},
+                feedback_store=store,
+            )
+
+        self.assertEqual(project["path"], str(self.payments.resolve()))
+        self.assertIsNone(evidence)
+        route.assert_not_called()
+
+    def test_stale_taught_correction_stops_routing(self) -> None:
+        task = "fix payments api authorization"
+        store = self.feedback_store()
+        store.append_teach(task, self.projects()[2], event_id="teach-launcher")
+
+        with patch("terminal_agent_launcher.cli.route_task") as route:
+            with self.assertRaisesRegex(cli.StaleCorrectionError, "stale"):
+                cli.resolve_task(
+                    task,
+                    self.projects()[:2],
+                    routing_roots=(self.root,),
+                    feedback_store=store,
+                )
+
+        route.assert_not_called()
+
+    def test_taught_correction_rejects_an_ambiguous_catalog_target(self) -> None:
+        task = "fix payments api authorization"
+        store = self.feedback_store()
+        store.append_teach(task, self.projects()[2], event_id="teach-launcher")
+        duplicate = dict(self.projects()[2])
+
+        with patch("terminal_agent_launcher.cli.route_task") as route:
+            with self.assertRaisesRegex(cli.StaleCorrectionError, "ambiguous"):
+                cli.resolve_task(
+                    task,
+                    [*self.projects(), duplicate],
+                    routing_roots=(self.root,),
+                    feedback_store=store,
+                )
+
+        route.assert_not_called()
+
+    def test_cli_records_confident_heuristic_route_before_agent_launch(self) -> None:
+        task = "change Terminal Agent Launcher project routing"
+        (self.launcher / "README.md").write_text(
+            "Terminal Agent Launcher project routing", encoding="utf-8"
+        )
+        feedback_store = self.feedback_store()
+        receipt_store = self.receipt_store()
+
+        def launch_after_receipt(project, agent):
+            receipt = receipt_store.receipts()[0]
+            self.assertEqual(receipt.task, task)
+            self.assertEqual(receipt.selected_project["path"], project["path"])
+            self.assertEqual(agent, "codex")
+            return 0
+
+        with (
+            patch("terminal_agent_launcher.cli.FeedbackStore", return_value=feedback_store),
+            patch("terminal_agent_launcher.cli.ReceiptStore", return_value=receipt_store),
+            patch("terminal_agent_launcher.cli.terminal_identity", return_value="/dev/ttys-test"),
+            patch("terminal_agent_launcher.cli.launch_project", side_effect=launch_after_receipt),
+        ):
+            self.assertEqual(
+                cli.main(["--config", str(self.config_path), task, "--agent", "codex"]),
+                0,
+            )
 
     def test_cli_routes_nested_non_git_secondbrain_instead_of_sibling_repository(self) -> None:
         blockdaemon = self.root / "work" / "blockdaemon"

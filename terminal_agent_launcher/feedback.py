@@ -80,7 +80,7 @@ def project_identity(project: Mapping[str, Any]) -> dict[str, str]:
     if not isinstance(path, str) or not path or not Path(path).is_absolute():
         raise FeedbackError("Project identity requires an absolute path.")
     if project_id is None:
-        project_id = "sha256:" + hashlib.sha256(path.encode("utf-8")).hexdigest()
+        project_id = hashlib.sha256(path.encode("utf-8")).hexdigest()[:16]
     if not isinstance(project_id, str) or not project_id:
         raise FeedbackError("Project identity requires a nonempty id.")
     return {"id": project_id, "name": name, "path": path}
