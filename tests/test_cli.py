@@ -248,6 +248,63 @@ class CliTestCase(unittest.TestCase):
         self.assertIn("Ambiguous project", errors.getvalue())
         self.assertIn("Alias 'stale' is stale", errors.getvalue())
 
+    def test_cli_routes_unresolved_task_text_but_stale_alias_remains_terminal(self) -> None:
+        (self.launcher / "README.md").write_text(
+            "Terminal Agent Launcher project routing", encoding="utf-8"
+        )
+        config = load_config(self.config_path)
+        config["aliases"]["stale alias"] = "/missing"
+        save_config(config, self.config_path)
+
+        with patch("terminal_agent_launcher.cli.launch_project", return_value=0) as launch:
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "change Terminal Agent Launcher project routing",
+                        "--agent",
+                        "codex",
+                    ]
+                ),
+                0,
+            )
+        self.assertEqual(launch.call_args.args[0]["path"], str(self.launcher.resolve()))
+
+        errors = io.StringIO()
+        with redirect_stderr(errors):
+            self.assertEqual(
+                cli.main(
+                    ["--config", str(self.config_path), "stale alias", "--agent", "codex"]
+                ),
+                2,
+            )
+        self.assertIn("Alias 'stale alias' is stale", errors.getvalue())
+
+    def test_cli_route_previews_evidence_without_launching(self) -> None:
+        (self.launcher / "README.md").write_text(
+            "Terminal Agent Launcher project routing", encoding="utf-8"
+        )
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("terminal_agent_launcher.cli.launch_project") as launch,
+        ):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "route",
+                        "change Terminal Agent Launcher project routing",
+                    ]
+                ),
+                0,
+            )
+        launch.assert_not_called()
+        self.assertIn(str(self.launcher.resolve()), output.getvalue())
+        self.assertIn("matched: launcher, terminal", output.getvalue())
+
     def test_cli_reports_launch_oserror_without_traceback(self) -> None:
         errors = io.StringIO()
         with (

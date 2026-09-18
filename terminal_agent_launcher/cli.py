@@ -18,10 +18,15 @@ from .server import (
     load_config,
     save_config,
 )
+from .routing import RoutingEvidence, route_task
 
 
 class SelectorError(ConfigError):
     """Raised when a project selector does not identify one project."""
+
+
+class UnknownSelectorError(SelectorError):
+    """Raised when direct selector resolution found no possible project."""
 
 
 class AgentNotFoundError(ConfigError):
@@ -92,9 +97,40 @@ def resolve_project(
         raise SelectorError(
             f"Ambiguous project '{selector}': {_candidate_lines(matches)}"
         )
-    raise SelectorError(
+    raise UnknownSelectorError(
         f"No project matches '{selector}'. Available: {_candidate_lines(projects) or 'none.'}"
     )
+
+
+def _routing_error(task: str, evidence: RoutingEvidence) -> SelectorError:
+    candidates = "; ".join(
+        f"{candidate.project['name']} ({candidate.project['path']}, score {candidate.score:.2f})"
+        for candidate in evidence.candidates[:3]
+    )
+    return SelectorError(
+        f"Could not confidently route '{task}' "
+        f"(score {evidence.score:.2f}, margin {evidence.confidence_margin:.2f}). "
+        f"Candidates: {candidates or 'none.'}"
+    )
+
+
+def resolve_task(
+    task: str,
+    projects: Sequence[dict[str, Any]],
+    aliases: dict[str, str] | None = None,
+    routing_roots: Sequence[Path | str] = (),
+) -> tuple[dict[str, Any], RoutingEvidence | None]:
+    """Resolve direct selectors first, then route only unresolved task text."""
+    try:
+        return resolve_project(task, projects, aliases), None
+    except UnknownSelectorError:
+        if len(task.split()) < 2:
+            raise
+
+    evidence = route_task(task, projects, routing_roots)
+    if evidence.project is None:
+        raise _routing_error(task, evidence)
+    return evidence.project, evidence
 
 
 def validate_alias_name(alias: str) -> str:
@@ -163,6 +199,26 @@ def _list_projects(projects: Sequence[dict[str, Any]]) -> None:
         print(f"{project['name']}\t{project['path']}")
 
 
+def _routing_roots(config: dict[str, Any]) -> tuple[Path, ...]:
+    roots: list[Path] = []
+    for location in config["locations"]:
+        try:
+            roots.append(canonical_path(expand_path(location["path"]), strict=True))
+        except OSError:
+            continue
+    return tuple(roots)
+
+
+def _print_route(evidence: RoutingEvidence) -> None:
+    if evidence.project is None:
+        return
+    print(f"{evidence.project['name']}\t{evidence.project['path']}")
+    print(
+        f"Score: {evidence.score:.2f}; margin: {evidence.confidence_margin:.2f}; "
+        f"matched: {', '.join(evidence.strongest_terms)}"
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -193,11 +249,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
             raise ConfigError("Usage: tal alias add NAME PROJECT | tal alias remove NAME")
 
-        if len(arguments) != 1:
-            raise ConfigError("Usage: tal list | tal alias ... | tal PROJECT --agent claude|codex")
+        routing_roots = _routing_roots(config)
+        if len(arguments) >= 2 and arguments[0] == "route":
+            task = " ".join(arguments[1:])
+            evidence = route_task(task, projects, routing_roots)
+            if evidence.project is None:
+                raise _routing_error(task, evidence)
+            if args.agent is None:
+                _print_route(evidence)
+                return 0
+            return launch_project(evidence.project, args.agent)
+
+        if not arguments:
+            raise ConfigError("Usage: tal list | tal route TASK | tal PROJECT --agent claude|codex")
         if args.agent is None:
-            raise ConfigError("Launching a project requires --agent claude or --agent codex.")
-        project = resolve_project(arguments[0], projects, config["aliases"])
+            raise ConfigError("Launching a project requires --agent claude or codex.")
+        selector = " ".join(arguments)
+        project, _ = resolve_task(
+            selector, projects, config["aliases"], routing_roots
+        )
         return launch_project(project, args.agent)
     except ConfigError as exc:
         print(f"tal: {exc}", file=sys.stderr)
