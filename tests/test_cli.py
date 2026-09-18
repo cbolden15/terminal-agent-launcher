@@ -5,11 +5,12 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from terminal_agent_launcher import cli
-from terminal_agent_launcher.feedback import FeedbackStore, ReceiptStore
+from terminal_agent_launcher.feedback import FeedbackStore, ReceiptStore, make_route_receipt
 from terminal_agent_launcher.server import ConfigError, load_config, save_config
 
 
@@ -493,6 +494,193 @@ class CliTestCase(unittest.TestCase):
                 0,
             )
 
+    def test_cli_teach_task_lists_shows_and_append_only_revokes_correction(self) -> None:
+        store = self.feedback_store()
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("terminal_agent_launcher.cli.FeedbackStore", return_value=store),
+        ):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "teach",
+                        "Terminal Agent Launcher",
+                        "--task",
+                        "Fix the launch shortcut",
+                    ]
+                ),
+                0,
+            )
+
+        correction = next(iter(store.active_corrections().values()))
+        self.assertEqual(correction.task, "Fix the launch shortcut")
+        self.assertEqual(correction.expected_project["path"], str(self.launcher.resolve()))
+        self.assertIn("Recorded taught correction", output.getvalue())
+
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("terminal_agent_launcher.cli.FeedbackStore", return_value=store),
+        ):
+            self.assertEqual(cli.main(["--config", str(self.config_path), "teach", "--list"]), 0)
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "teach",
+                        "--show",
+                        correction.feedback_id,
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "teach",
+                        "--revoke",
+                        correction.feedback_id,
+                        "--yes",
+                    ]
+                ),
+                0,
+            )
+
+        self.assertEqual(store.active_corrections(), {})
+        self.assertEqual([event["event"] for event in store.events()], ["teach", "revoke"])
+        self.assertIn(correction.feedback_id, output.getvalue())
+        self.assertIn("Revoked taught correction", output.getvalue())
+
+    def test_cli_teach_receipt_preserves_observed_route_for_noninteractive_callers(self) -> None:
+        feedback_store = self.feedback_store()
+        receipt_store = self.receipt_store()
+        receipt_store.record(
+            make_route_receipt(
+                "Fix the launch shortcut",
+                self.projects()[0],
+                {"score": 8.0, "margin": 1.5, "matched_terms": ["launch"]},
+                terminal_id="/dev/ttys-other",
+                receipt_id="receipt-1",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+        with (
+            patch("terminal_agent_launcher.cli.FeedbackStore", return_value=feedback_store),
+            patch("terminal_agent_launcher.cli.ReceiptStore", return_value=receipt_store),
+        ):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "teach",
+                        "Terminal Agent Launcher",
+                        "--receipt",
+                        "receipt-1",
+                    ]
+                ),
+                0,
+            )
+
+        correction = next(iter(feedback_store.active_corrections().values()))
+        self.assertEqual(correction.task, "Fix the launch shortcut")
+        self.assertEqual(
+            correction.observed["selected_project_id"],
+            receipt_store.find("receipt-1").selected_project["id"],
+        )
+        self.assertEqual(correction.observed["score"], 8.0)
+
+    def test_cli_teach_last_confirms_current_terminal_receipt_and_rejects_noninteractive_use(self) -> None:
+        feedback_store = self.feedback_store()
+        receipt_store = self.receipt_store()
+        receipt_store.record(
+            make_route_receipt(
+                "Fix the launch shortcut",
+                self.projects()[0],
+                {"score": 8.0, "margin": 1.5, "matched_terms": ["launch"]},
+                terminal_id="/dev/ttys-current",
+                receipt_id="receipt-current",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        errors = io.StringIO()
+        with (
+            redirect_stderr(errors),
+            patch("terminal_agent_launcher.cli.terminal_identity", return_value="/dev/ttys-current"),
+            patch("terminal_agent_launcher.cli.ReceiptStore", return_value=receipt_store),
+        ):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "teach",
+                        "Terminal Agent Launcher",
+                        "--last",
+                    ]
+                ),
+                2,
+            )
+        self.assertIn("requires an interactive terminal", errors.getvalue())
+
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("terminal_agent_launcher.cli.FeedbackStore", return_value=feedback_store),
+            patch("terminal_agent_launcher.cli.ReceiptStore", return_value=receipt_store),
+            patch("terminal_agent_launcher.cli.terminal_identity", return_value="/dev/ttys-current"),
+            patch("terminal_agent_launcher.cli._is_interactive", return_value=True),
+            patch("terminal_agent_launcher.cli._confirm", return_value=True),
+        ):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "teach",
+                        "Terminal Agent Launcher",
+                        "--last",
+                    ]
+                ),
+                0,
+            )
+
+        self.assertIn("Task: Fix the launch shortcut", output.getvalue())
+        self.assertIn("Receipt ID: receipt-current", output.getvalue())
+        self.assertIn("Age:", output.getvalue())
+        self.assertEqual(len(feedback_store.active_corrections()), 1)
+
+    def test_cli_teach_revoke_requires_interactive_confirmation_without_yes(self) -> None:
+        store = self.feedback_store()
+        correction = store.append_teach("Fix the launch shortcut", self.projects()[2])
+        errors = io.StringIO()
+        with (
+            redirect_stderr(errors),
+            patch("terminal_agent_launcher.cli.FeedbackStore", return_value=store),
+        ):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--config",
+                        str(self.config_path),
+                        "teach",
+                        "--revoke",
+                        correction.feedback_id,
+                    ]
+                ),
+                2,
+            )
+
+        self.assertIn("interactive terminal or --yes", errors.getvalue())
+        self.assertIn(correction.feedback_id, store.active_corrections())
+
     def test_cli_routes_nested_non_git_secondbrain_instead_of_sibling_repository(self) -> None:
         blockdaemon = self.root / "work" / "blockdaemon"
         blockdaemon.mkdir(parents=True)
@@ -597,6 +785,9 @@ class CliTestCase(unittest.TestCase):
         self.assertEqual(exit_context.exception.code, 0)
         self.assertIn("locally without model tokens", output.getvalue())
         self.assertIn("tal route TASK", output.getvalue())
+        self.assertIn("tal teach PROJECT --last|--receipt ID|--task TASK", output.getvalue())
+        self.assertIn("exact normalized task matches only", output.getvalue())
+        self.assertIn("terminal stale correction error", output.getvalue())
 
     def test_cli_reports_launch_oserror_without_traceback(self) -> None:
         errors = io.StringIO()

@@ -78,6 +78,46 @@ bounded local metadata, makes no network requests or API calls, and uses zero
 model tokens. Before launching a task route, `tal` prints the selected canonical
 repository, score, confidence margin, and strongest matched terms.
 
+### Teach a routing correction
+
+When a recent local route chose the wrong project, teach the intended project:
+
+```bash
+tal teach SecondBrain --last
+```
+
+`--last` only uses a receipt from the current terminal that is younger than 15
+minutes. It shows the task, route, receipt ID, and age, then asks for
+confirmation. Scripts and non-interactive shells must name the source explicitly:
+
+```bash
+tal teach SecondBrain --receipt ROUTE_RECEIPT_ID
+tal teach SecondBrain --task "continue the knowledge capture work"
+```
+
+Corrections are exact normalized task matches only. The normalization folds
+Unicode compatibility variants and case and collapses whitespace; it does not do
+fuzzy matching. Direct aliases and other direct selectors still take precedence.
+List, inspect, or append a revocation without rewriting history:
+
+```bash
+tal teach --list
+tal teach --show FEEDBACK_ID
+tal teach --revoke FEEDBACK_ID
+tal teach --revoke FEEDBACK_ID --yes
+```
+
+The feedback history is private at
+`$XDG_DATA_HOME/terminal-agent-launcher/routing/feedback.jsonl` (or
+`~/.local/share/terminal-agent-launcher/routing/feedback.jsonl` when XDG is
+unset). Bounded route receipts are private at
+`$XDG_STATE_HOME/terminal-agent-launcher/routing/receipts.jsonl` (or
+`~/.local/state/terminal-agent-launcher/routing/receipts.jsonl`). If a taught
+project is no longer in the discovered catalog, routing stops with a stale
+correction error rather than falling back to heuristics. Restore the project to
+the configured catalog or revoke the correction with `tal teach --revoke
+FEEDBACK_ID`.
+
 ## Autonomous routing research
 
 From a clean source checkout, run a bounded experiment session:

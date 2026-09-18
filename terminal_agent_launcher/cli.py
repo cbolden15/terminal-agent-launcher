@@ -6,6 +6,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -271,11 +272,21 @@ def build_parser() -> argparse.ArgumentParser:
             "  tal route TASK\n"
             "  tal route TASK --agent claude|codex\n"
             "  tal PROJECT --agent claude|codex\n"
+            "  tal teach PROJECT --last|--receipt ID|--task TASK\n"
+            "  tal teach --list|--show FEEDBACK_ID|--revoke FEEDBACK_ID [--yes]\n"
             "  tal research [--provider codex]\n"
             "\n"
             "Unresolved multi-word PROJECT values are routed locally using "
-            "repository names, paths, and bounded local metadata. Research "
-            "runs are explicit, bounded, and isolated from the installed router."
+            "repository names, paths, and bounded local metadata.\n"
+            "\n"
+            "Teach corrections are exact normalized task matches only; direct selectors still win.\n"
+            "--last previews this terminal's receipt younger than 15 minutes and confirms it;\n"
+            "scripts use --receipt or --task.\n"
+            "Feedback is private at $XDG_DATA_HOME/terminal-agent-launcher/routing and receipts at\n"
+            "$XDG_STATE_HOME/terminal-agent-launcher/routing. A correction whose project leaves\n"
+            "the catalog is a terminal stale correction error: restore the project or revoke its ID.\n"
+            "\n"
+            "Research runs are explicit, bounded, and isolated from the installed router."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -301,6 +312,41 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_MAX_MINUTES,
         help=f"Research wall-clock limit (default: {DEFAULT_MAX_MINUTES:g}).",
+    )
+    parser.add_argument(
+        "--last",
+        action="store_true",
+        help="Teach from this terminal's newest route receipt (interactive only).",
+    )
+    parser.add_argument(
+        "--receipt",
+        metavar="ID",
+        help="Teach from an explicit route receipt ID.",
+    )
+    parser.add_argument(
+        "--task",
+        metavar="TASK",
+        help="Teach an explicit task without using route history.",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List active taught corrections.",
+    )
+    parser.add_argument(
+        "--show",
+        metavar="FEEDBACK_ID",
+        help="Show one active taught correction.",
+    )
+    parser.add_argument(
+        "--revoke",
+        metavar="FEEDBACK_ID",
+        help="Append a revocation for one active taught correction.",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm a teach revocation without a prompt.",
     )
     parser.add_argument("arguments", nargs="*", metavar="COMMAND")
     return parser
@@ -369,6 +415,152 @@ def _record_route_receipt(
     (receipt_store or ReceiptStore()).record(receipt)
 
 
+def _is_interactive() -> bool:
+    """Return whether an interactive confirmation can be read safely."""
+    return sys.stdin.isatty()
+
+
+def _confirm(prompt: str) -> bool:
+    try:
+        return input(f"{prompt} [y/N] ").strip().casefold() in {"y", "yes"}
+    except EOFError:
+        return False
+
+
+def _format_age(created_at: datetime) -> str:
+    seconds = max(0, int((datetime.now(timezone.utc) - created_at).total_seconds()))
+    minutes, seconds = divmod(seconds, 60)
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _observed_from_receipt(receipt: Any) -> dict[str, Any]:
+    return {
+        "selected_project_id": receipt.selected_project["id"],
+        "score": receipt.evidence["score"],
+        "margin": receipt.evidence["margin"],
+        "matched_terms": receipt.evidence["matched_terms"],
+    }
+
+
+def _print_correction(correction: FeedbackCorrection) -> None:
+    print(f"Feedback ID: {correction.feedback_id}")
+    print(f"Task: {correction.task}")
+    print(
+        "Expected project: "
+        f"{correction.expected_project['name']} ({correction.expected_project['path']})"
+    )
+    print(f"Created: {correction.created_at.isoformat().replace('+00:00', 'Z')}")
+    if correction.observed is not None:
+        observed_id = correction.observed.get("selected_project_id", "unknown")
+        print(f"Observed project ID: {observed_id}")
+
+
+def _active_correction(store: FeedbackStore, feedback_id: str) -> FeedbackCorrection:
+    correction = store.active_corrections().get(feedback_id)
+    if correction is None:
+        raise FeedbackError(f"No active taught correction has feedback ID: {feedback_id}")
+    return correction
+
+
+def _teach(args: argparse.Namespace, projects: Sequence[dict[str, Any]], aliases: dict[str, str]) -> int:
+    """Run the explicit feedback commands without changing router behavior."""
+    arguments = args.arguments
+    management_actions = sum(
+        bool(value) for value in (args.list, args.show, args.revoke)
+    )
+    task_sources = sum(bool(value) for value in (args.last, args.receipt, args.task))
+    store = FeedbackStore()
+
+    if arguments == ["teach"] and management_actions == 1 and task_sources == 0:
+        if args.yes and not args.revoke:
+            raise ConfigError("--yes is only valid with 'tal teach --revoke FEEDBACK_ID'.")
+        if args.list:
+            corrections = store.active_corrections()
+            if not corrections:
+                print("No active taught corrections.")
+                return 0
+            for correction in sorted(
+                corrections.values(), key=lambda item: (item.created_at, item.feedback_id)
+            ):
+                print(
+                    f"{correction.feedback_id}\t{correction.expected_project['name']}\t"
+                    f"{correction.task}"
+                )
+            return 0
+        if args.show:
+            _print_correction(_active_correction(store, args.show))
+            return 0
+
+        correction = _active_correction(store, args.revoke)
+        _print_correction(correction)
+        if not args.yes:
+            if not _is_interactive():
+                raise ConfigError(
+                    "'tal teach --revoke' requires an interactive terminal or --yes."
+                )
+            if not _confirm("Revoke this taught correction?"):
+                print("Revocation cancelled.")
+                return 0
+        store.append_revoke(correction.feedback_id)
+        print(f"Revoked taught correction {correction.feedback_id}.")
+        return 0
+
+    if management_actions:
+        raise ConfigError(
+            "Usage: tal teach --list | --show FEEDBACK_ID | --revoke FEEDBACK_ID [--yes]"
+        )
+    if args.yes:
+        raise ConfigError("--yes is only valid with 'tal teach --revoke FEEDBACK_ID'.")
+    if len(arguments) < 2 or arguments[0] != "teach" or task_sources != 1:
+        raise ConfigError(
+            "Usage: tal teach PROJECT --last | --receipt ID | --task TASK"
+        )
+
+    project = resolve_project(" ".join(arguments[1:]), projects, aliases)
+    receipt = None
+    if args.last:
+        terminal = terminal_identity()
+        if terminal is None or not _is_interactive():
+            raise ConfigError(
+                "'tal teach PROJECT --last' requires an interactive terminal; use --receipt or --task."
+            )
+        receipt = ReceiptStore().last_for_terminal(terminal)
+        if receipt is None:
+            raise FeedbackError(
+                "No route receipt from this terminal is younger than 15 minutes. "
+                "Use --receipt or --task."
+            )
+        print("Teach correction preview:")
+        print(f"Task: {receipt.task}")
+        print(
+            "Routed to: "
+            f"{receipt.selected_project['name']} ({receipt.selected_project['path']})"
+        )
+        print(f"Receipt ID: {receipt.receipt_id}")
+        print(f"Age: {_format_age(receipt.created_at)}")
+        if not _confirm(
+            f"Teach this task to {project['name']} ({project['path']})?"
+        ):
+            print("Teaching cancelled.")
+            return 0
+    elif args.receipt:
+        receipt = ReceiptStore().find(args.receipt)
+
+    task = receipt.task if receipt is not None else args.task
+    correction = store.append_teach(
+        task,
+        project,
+        observed=_observed_from_receipt(receipt) if receipt is not None else None,
+    )
+    print(
+        f"Recorded taught correction {correction.feedback_id}: "
+        f"'{correction.task}' -> {project['name']} ({project['path']})"
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -402,6 +594,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         config = load_config(args.config)
         projects = discover_cli_projects(config)
+
+        teach_options_used = any(
+            (args.last, args.receipt, args.task, args.list, args.show, args.revoke, args.yes)
+        )
+        if arguments and arguments[0] == "teach":
+            if args.agent is not None:
+                raise ConfigError("--agent is not valid for tal teach.")
+            return _teach(args, projects, config["aliases"])
+        if teach_options_used:
+            raise ConfigError("Teach options are only valid with 'tal teach'.")
 
         if arguments == ["list"] and args.agent is None:
             _list_projects(projects)
