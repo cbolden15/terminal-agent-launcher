@@ -240,6 +240,7 @@ def route_task(
         term
         for term in task_terms
         if sum(term in profile.terms for profile in profiles) / len(profiles) < 0.75
+        or sum(term in profile.name_terms for profile in profiles) == 1
     }
     if not useful_terms:
         return RoutingEvidence(None, 0.0, 0.0, (), ())
