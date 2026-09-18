@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from terminal_agent_launcher.feedback import (
     FeedbackBusyError,
@@ -62,6 +63,26 @@ class FeedbackTestCase(unittest.TestCase):
         events = store.events()
         self.assertEqual([event["event"] for event in events], ["teach", "revoke"])
         self.assertEqual(events[0]["task"], "Fix billing")
+
+    def test_failed_atomic_feedback_write_preserves_existing_history(self) -> None:
+        store = FeedbackStore(self.feedback_path)
+        store.append_teach("Fix billing", self.project, event_id="teach-1", created_at=self.now)
+        before = self.feedback_path.read_bytes()
+
+        with patch(
+            "terminal_agent_launcher.feedback.os.replace",
+            side_effect=OSError("injected replace failure"),
+        ):
+            with self.assertRaisesRegex(FeedbackError, "atomically write"):
+                store.append_teach(
+                    "Fix invoices",
+                    self.project,
+                    event_id="teach-2",
+                    created_at=self.now + timedelta(seconds=1),
+                )
+
+        self.assertEqual(self.feedback_path.read_bytes(), before)
+        self.assertEqual([event["event_id"] for event in store.events()], ["teach-1"])
 
     def test_reducer_rejects_duplicate_unknown_and_invalid_revoke_transitions(self) -> None:
         store = FeedbackStore(self.feedback_path)

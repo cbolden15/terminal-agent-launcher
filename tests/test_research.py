@@ -24,9 +24,11 @@ from terminal_agent_launcher.research import (
     build_prompt,
     evaluate_candidate,
     load_cases,
+    run_gate,
     run_research,
     should_promote,
 )
+from terminal_agent_launcher.research_eval import _load_router
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +54,40 @@ class FakeImprovingProvider:
 
 
 class ResearchTestCase(unittest.TestCase):
+    def test_candidate_evaluation_does_not_write_bytecode_into_the_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            router = root / "routing.py"
+            cache = root / "cache"
+            router.write_text(
+                "def route_task(task, projects, roots=()):\n    return None\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(sys, "pycache_prefix", str(cache)):
+                _load_router(router)
+
+            self.assertEqual(list(cache.rglob("*.pyc")), [])
+
+    def test_test_gate_disables_python_bytecode_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            completed = subprocess.CompletedProcess(["python3"], 0)
+            with patch(
+                "terminal_agent_launcher.research.subprocess.run",
+                return_value=completed,
+            ) as run:
+                passed, detail = run_gate(
+                    root,
+                    ["python3", "-c", "pass"],
+                    root / "gate.log",
+                    1,
+                )
+
+            self.assertTrue(passed)
+            self.assertEqual(detail, "test command exited 0")
+            self.assertEqual(run.call_args.kwargs["env"]["PYTHONDONTWRITEBYTECODE"], "1")
+
     def test_public_corpus_has_no_confident_wrong_routes_or_errors(self) -> None:
         cases = load_cases(ROOT)
         snapshot = evaluate_candidate(ROOT / "terminal_agent_launcher" / "routing.py", cases)

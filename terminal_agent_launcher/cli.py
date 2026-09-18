@@ -160,12 +160,18 @@ def _resolve_taught_correction(
     ).get(task_fingerprint_v1(task), ())
     if not matches:
         return None
-    if len(matches) != 1:
+
+    expected_targets: dict[tuple[str, str], dict[str, str]] = {}
+    for correction in matches:
+        expected = correction.expected_project
+        key = (expected["id"], _canonical_project_path(expected))
+        expected_targets.setdefault(key, expected)
+    if len(expected_targets) != 1:
         raise StaleCorrectionError(
             f"Taught correction for '{task}' is ambiguous; revoke conflicting corrections."
         )
 
-    expected = matches[0].expected_project
+    expected = next(iter(expected_targets.values()))
     expected_path = _canonical_project_path(expected)
     matching_ids = [
         project for project in projects if project_identity(project)["id"] == expected["id"]
@@ -196,13 +202,12 @@ def resolve_task(
     try:
         return resolve_project(task, projects, aliases), None
     except UnknownSelectorError:
+        corrections = (feedback_store or FeedbackStore()).active_corrections()
+        taught_project = _resolve_taught_correction(task, projects, tuple(corrections.values()))
+        if taught_project is not None:
+            return taught_project, None
         if len(task.split()) < 2:
             raise
-
-    corrections = (feedback_store or FeedbackStore()).active_corrections()
-    taught_project = _resolve_taught_correction(task, projects, tuple(corrections.values()))
-    if taught_project is not None:
-        return taught_project, None
 
     evidence = route_task(task, projects, routing_roots)
     if evidence.project is None:

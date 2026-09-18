@@ -1,7 +1,7 @@
 {
   "id": "2026-09-18-phase-2a-teach-routing-notes",
   "title": "Implementation notes — Milestone 2A teach and exact routing corrections",
-  "subtitle": "phase 2 of 3 implemented · 2026-09-18 16:45 CDT",
+  "subtitle": "implementation complete · 2026-09-18",
   "introTitle": "How to use",
   "intro": "<p>Each item is a decision, deviation, or tradeoff made during implementation. <strong>Acknowledge</strong> if fine. <strong>Discuss</strong> to write what should change. <strong>Revert</strong> to flag for undo.</p>",
   "actions": ["acknowledge", "discuss", "revert"],
@@ -28,11 +28,11 @@
       "group": "phase-1",
       "title": "Research test exposed bytecode-sensitive hygiene",
       "where": "tests/test_research.py:test_bounded_run_keeps_an_improvement_on_a_candidate_branch",
-      "default": "discuss",
+      "default": "acknowledge",
       "body": {
-        "What I did": "Kept Phase 1 scoped to feedback storage; the required gate passed on its subsequent clean run.",
+        "What I did": "Disabled bytecode writes while the isolated evaluator imports a candidate router and while the research test gate runs, with regression coverage for both paths.",
         "Why": "The first full-suite run created an untracked __pycache__ inside a temporary research worktree, which the patch allowlist rejected.",
-        "Risk": "The research test can depend on whether Python bytecode already exists and should be hardened before release."
+        "Result": "Evaluation no longer dirties the candidate worktree, and the patch allowlist remains strict."
       }
     },
     {
@@ -45,6 +45,40 @@
         "Spec said": "Resolve taught targets by stable project identity and canonical path.",
         "What I did": "Made the fallback identity use the same deterministic 16-character SHA-256 value as project discovery.",
         "Why": "A correction captured from a project mapping without an explicit ID now resolves identically when the live catalog supplies its discovery ID."
+      }
+    },
+    {
+      "id": "N4",
+      "group": "phase-3",
+      "title": "Apply exact corrections before the heuristic word-count guard",
+      "where": "terminal_agent_launcher/cli.py",
+      "default": "acknowledge",
+      "body": {
+        "Spec said": "Resolve taught fingerprints after direct selectors but before route_task.",
+        "What I did": "Exact taught corrections now work for one-word tasks; untaught one-word selectors still fail before heuristic routing.",
+        "Why": "The teach command accepts any nonempty task, so every recorded exact correction must be reachable."
+      }
+    },
+    {
+      "id": "N5",
+      "group": "phase-3",
+      "title": "Keep feedback history crash-atomic",
+      "where": "terminal_agent_launcher/feedback.py",
+      "default": "acknowledge",
+      "body": {
+        "Spec said": "Feedback writes are atomic and corrections remain append-only events.",
+        "What I did": "Each locked teach or revoke now atomically replaces the JSONL file with the complete prior history plus one new event.",
+        "Why": "A failed write cannot leave a partial record that makes all private feedback unreadable."
+      }
+    },
+    {
+      "id": "N6",
+      "group": "phase-3",
+      "title": "Implementation complete",
+      "where": "Milestone 2A",
+      "default": "acknowledge",
+      "body": {
+        "Result": "Secure feedback storage, exact correction routing, route receipts, and the teach/list/show/revoke CLI are implemented and verified."
       }
     }
   ]

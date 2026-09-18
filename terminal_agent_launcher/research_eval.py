@@ -42,9 +42,12 @@ def _load_router(router_path: Path) -> Any:
         raise RuntimeError(f"Could not load candidate router from {router_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
     try:
         spec.loader.exec_module(module)
     finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
         sys.modules.pop(module_name, None)
     if not callable(getattr(module, "route_task", None)):
         raise RuntimeError("Candidate router does not define callable route_task")

@@ -402,6 +402,27 @@ class CliTestCase(unittest.TestCase):
         route.assert_not_called()
         provider.assert_not_called()
 
+    def test_taught_one_word_task_applies_before_the_heuristic_word_count_guard(self) -> None:
+        store = self.feedback_store()
+        store.append_teach("shortcut", self.projects()[2], event_id="teach-shortcut")
+
+        with patch("terminal_agent_launcher.cli.route_task") as route:
+            project, evidence = cli.resolve_task(
+                "shortcut",
+                self.projects(),
+                feedback_store=store,
+            )
+            with self.assertRaises(cli.UnknownSelectorError):
+                cli.resolve_task(
+                    "untaught",
+                    self.projects(),
+                    feedback_store=store,
+                )
+
+        self.assertEqual(project["path"], str(self.launcher.resolve()))
+        self.assertIsNone(evidence)
+        route.assert_not_called()
+
     def test_similar_untaught_task_uses_the_heuristic_router(self) -> None:
         store = self.feedback_store()
         store.append_teach("fix payments api", self.projects()[2], event_id="teach-launcher")
@@ -467,6 +488,28 @@ class CliTestCase(unittest.TestCase):
                 )
 
         route.assert_not_called()
+
+    def test_duplicate_same_target_corrections_resolve_but_conflicting_targets_fail(self) -> None:
+        task = "fix payments api authorization"
+        store = self.feedback_store()
+        store.append_teach(task, self.projects()[2], event_id="teach-launcher-1")
+        store.append_teach(task, self.projects()[2], event_id="teach-launcher-2")
+
+        project, evidence = cli.resolve_task(
+            task,
+            self.projects(),
+            feedback_store=store,
+        )
+        self.assertEqual(project["path"], str(self.launcher.resolve()))
+        self.assertIsNone(evidence)
+
+        store.append_teach(task, self.projects()[0], event_id="teach-payments")
+        with self.assertRaisesRegex(cli.StaleCorrectionError, "ambiguous"):
+            cli.resolve_task(
+                task,
+                self.projects(),
+                feedback_store=store,
+            )
 
     def test_cli_records_confident_heuristic_route_before_agent_launch(self) -> None:
         task = "change Terminal Agent Launcher project routing"

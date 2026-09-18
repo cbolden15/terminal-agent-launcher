@@ -8,6 +8,7 @@ Non-obvious behaviors and fixes discovered while developing Terminal Agent Launc
 - Folder discovery
 - iTerm2 integration
 - macOS LaunchAgent
+- Routing research
 
 ## Registry
 
@@ -60,6 +61,16 @@ Non-obvious behaviors and fixes discovered while developing Terminal Agent Launc
 **Fix:** Pin current action releases by full commit SHA, keep the version in an inline comment, and enable Dependabot updates for the `github-actions` ecosystem.
 
 **Discovered:** 2026-08-29
+
+### RESEARCH-001 Candidate evaluation must not write Python bytecode
+
+**Symptom:** A valid routing proposal is intermittently rejected as changing files outside the routing allowlist.
+
+**Cause:** Importing a candidate router can create an untracked `__pycache__` inside its temporary Git worktree when Python has no external bytecode cache prefix.
+
+**Fix:** Temporarily disable bytecode writes while loading the candidate module. Keep the patch allowlist strict.
+
+**Discovered:** 2026-09-18
 
 <!--
 ### CATEGORY-001 Title

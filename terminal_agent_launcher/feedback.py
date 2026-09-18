@@ -467,25 +467,6 @@ def _read_jsonl(path: Path, validator: Callable[[Any], Any]) -> list[Any]:
         return records
 
 
-def _write_all(descriptor: int, payload: bytes) -> None:
-    view = memoryview(payload)
-    while view:
-        written = os.write(descriptor, view)
-        if written <= 0:
-            raise FeedbackError("Could not complete private store write.")
-        view = view[written:]
-
-
-def _append_jsonl(path: Path, record: Mapping[str, Any]) -> None:
-    payload = (json.dumps(dict(record), sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-    descriptor = _open_private_file(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
-    try:
-        _write_all(descriptor, payload)
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def _atomic_write_jsonl(path: Path, records: Sequence[Mapping[str, Any]]) -> None:
     path = _prepare_store_path(path)
     if _lstat(path) is not None and stat.S_ISLNK(_lstat(path).st_mode):
@@ -542,7 +523,7 @@ class FeedbackStore:
         with advisory_lock(self.path):
             events = _read_jsonl(self.path, _validate_feedback_event)
             reduce_feedback_events([*events, event])
-            _append_jsonl(self.path, event)
+            _atomic_write_jsonl(self.path, [*events, event])
         return FeedbackCorrection(
             feedback_id=event["event_id"],
             task=event["task"],
@@ -564,7 +545,7 @@ class FeedbackStore:
         with advisory_lock(self.path):
             events = _read_jsonl(self.path, _validate_feedback_event)
             reduce_feedback_events([*events, event])
-            _append_jsonl(self.path, event)
+            _atomic_write_jsonl(self.path, [*events, event])
         return event
 
 

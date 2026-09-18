@@ -544,9 +544,12 @@ def run_gate(
 ) -> tuple[bool, str]:
     try:
         with log_path.open("w", encoding="utf-8") as log:
+            environment = os.environ.copy()
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
             completed = subprocess.run(
                 list(command),
                 cwd=worktree,
+                env=environment,
                 text=True,
                 stdout=log,
                 stderr=subprocess.STDOUT,
