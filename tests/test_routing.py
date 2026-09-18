@@ -57,6 +57,31 @@ class RoutingTestCase(unittest.TestCase):
         self.assertIs(evidence.project, configuration)
         self.assertEqual(evidence.strongest_terms, ("codex", "global", "instructions"))
 
+    def test_fenced_task_example_cannot_tie_or_outrank_its_actual_repository(self) -> None:
+        configuration = self.project("agent-config")
+        (Path(configuration["path"]) / "README.md").write_text(
+            "Global Codex Claude instructions live here.", encoding="utf-8"
+        )
+        documentation = self.project("routing-docs")
+        (Path(documentation["path"]) / "README.md").write_text(
+            """How to preview a route:
+
+```sh
+tal route "update my global Codex and Claude instructions"
+```
+""",
+            encoding="utf-8",
+        )
+
+        evidence = route_task(
+            "update my global Codex and Claude instructions",
+            [documentation, configuration],
+            [self.root],
+        )
+
+        self.assertIs(evidence.project, configuration)
+        self.assertEqual([candidate.project for candidate in evidence.candidates], [configuration])
+
     def test_common_work_words_are_rejected(self) -> None:
         evidence = route_task(
             "update change my project", [self.project("one"), self.project("two")], [self.root]

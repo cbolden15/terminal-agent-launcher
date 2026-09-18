@@ -43,6 +43,7 @@ COMMON_TERMS = frozenset(
     }
 )
 _TOKEN_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|[^a-zA-Z0-9]+")
+_MARKDOWN_FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,34 @@ def _metadata_files(project_root: Path) -> Iterable[Path]:
     )
 
 
+def _is_markdown_metadata(candidate: Path) -> bool:
+    return candidate.suffix.casefold() in {".md", ".markdown"}
+
+
+def _without_fenced_markdown_blocks(content: str) -> str:
+    """Remove Markdown fenced blocks so examples cannot influence routing."""
+    visible_lines: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+    for line in content.splitlines(keepends=True):
+        line_without_newline = line.rstrip("\r\n")
+        if fence_character is not None:
+            closing_fence = re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}} *",
+                line_without_newline,
+            )
+            if closing_fence:
+                fence_character = None
+            continue
+        opening_fence = _MARKDOWN_FENCE_OPEN.match(line_without_newline)
+        if opening_fence:
+            fence_character = opening_fence.group(1)[0]
+            fence_length = len(opening_fence.group(1))
+            continue
+        visible_lines.append(line)
+    return "".join(visible_lines)
+
+
 def _read_metadata(project_root: Path) -> tuple[frozenset[str], tuple[frozenset[str], ...]]:
     terms: set[str] = set()
     documents: list[frozenset[str]] = []
@@ -129,7 +158,10 @@ def _read_metadata(project_root: Path) -> tuple[frozenset[str], tuple[frozenset[
                 content = handle.read(MAX_METADATA_BYTES)
         except OSError:
             continue
-        document_terms = frozenset(tokenize(content.decode("utf-8", errors="ignore")))
+        text = content.decode("utf-8", errors="ignore")
+        if _is_markdown_metadata(candidate):
+            text = _without_fenced_markdown_blocks(text)
+        document_terms = frozenset(tokenize(text))
         terms.update(document_terms)
         documents.append(document_terms)
     return frozenset(terms), tuple(documents)
