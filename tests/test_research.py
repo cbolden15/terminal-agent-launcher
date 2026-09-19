@@ -24,6 +24,7 @@ from terminal_agent_launcher.research import (
     build_prompt,
     evaluate_candidate,
     load_cases,
+    provider_workspace,
     run_gate,
     run_research,
     should_promote,
@@ -164,6 +165,70 @@ class ResearchTestCase(unittest.TestCase):
         self.assertNotIn("secret customer acquisition task", prompt)
         self.assertNotIn("private-secret", prompt)
 
+    def test_provider_workspace_contains_training_material_only(self) -> None:
+        cases = [
+            {
+                "id": "train-visible",
+                "split": "train",
+                "group": "train",
+                "task": "visible training task",
+                "expected": "visible",
+                "projects": [{"path": "visible"}],
+            },
+            {
+                "id": "holdout-secret",
+                "split": "holdout",
+                "group": "holdout",
+                "task": "hidden holdout task",
+                "expected": "hidden",
+                "projects": [{"path": "hidden"}],
+            },
+            {
+                "id": "private-secret",
+                "group": "private",
+                "task": "private customer task",
+                "expected": "private",
+                "projects": [{"path": "private"}],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            worktree = root / "worktree"
+            output = root / "output"
+            (worktree / "terminal_agent_launcher").mkdir(parents=True)
+            (worktree / "research").mkdir()
+            output.mkdir()
+            (worktree / "terminal_agent_launcher" / "routing.py").write_text(
+                "ROUTER_SENTINEL = True\n", encoding="utf-8"
+            )
+            (worktree / "research" / "proposal.schema.json").write_text(
+                "{}", encoding="utf-8"
+            )
+
+            with provider_workspace(worktree, cases, output, 1) as workspace:
+                files = {
+                    path.relative_to(workspace).as_posix()
+                    for path in workspace.rglob("*")
+                    if path.is_file()
+                }
+                corpus = (
+                    workspace / "research" / "routing_cases.train.jsonl"
+                ).read_text(encoding="utf-8")
+                workspace_path = workspace
+
+            self.assertEqual(
+                files,
+                {
+                    "terminal_agent_launcher/routing.py",
+                    "research/proposal.schema.json",
+                    "research/routing_cases.train.jsonl",
+                },
+            )
+            self.assertIn("visible training task", corpus)
+            self.assertNotIn("hidden holdout task", corpus)
+            self.assertNotIn("private customer task", corpus)
+            self.assertFalse(workspace_path.exists())
+
     def test_codex_provider_uses_read_only_structured_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -190,6 +255,7 @@ class ResearchTestCase(unittest.TestCase):
             self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
             self.assertEqual(command[command.index("--output-schema") + 1], str(schema))
             self.assertIn("--ephemeral", command)
+            self.assertIn("--skip-git-repo-check", command)
             self.assertEqual(result.status, "proposed")
             self.assertEqual(result.proposal.description, "one change")
 

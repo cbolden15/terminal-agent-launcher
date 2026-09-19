@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -13,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
+from typing import Any, Callable, Iterator, Mapping, Optional, Protocol, Sequence
 
 
 DEFAULT_MAX_EXPERIMENTS = 20
@@ -23,6 +24,7 @@ ROUTER_RELATIVE_PATH = Path("terminal_agent_launcher/routing.py")
 PUBLIC_CORPUS_RELATIVE_PATH = Path("research/routing_cases.public.jsonl")
 PRIVATE_CORPUS_RELATIVE_PATH = Path("research/routing_cases.private.jsonl")
 PROPOSAL_SCHEMA_RELATIVE_PATH = Path("research/proposal.schema.json")
+PROVIDER_TRAIN_CORPUS_RELATIVE_PATH = Path("research/routing_cases.train.jsonl")
 
 
 class ResearchError(RuntimeError):
@@ -99,7 +101,7 @@ class ProposalProvider(Protocol):
 
     def propose(
         self,
-        worktree: Path,
+        workspace: Path,
         prompt: str,
         output_directory: Path,
         experiment: int,
@@ -135,13 +137,13 @@ class CodexProvider:
 
     def propose(
         self,
-        worktree: Path,
+        workspace: Path,
         prompt: str,
         output_directory: Path,
         experiment: int,
         timeout_seconds: float,
     ) -> ProviderResult:
-        schema_path = worktree / PROPOSAL_SCHEMA_RELATIVE_PATH
+        schema_path = workspace / PROPOSAL_SCHEMA_RELATIVE_PATH
         response_path = output_directory / f"proposal-{experiment:03d}.json"
         log_path = output_directory / f"provider-{experiment:03d}.log"
         command = [
@@ -158,8 +160,9 @@ class CodexProvider:
             str(schema_path),
             "--output-last-message",
             str(response_path),
+            "--skip-git-repo-check",
             "--cd",
-            str(worktree),
+            str(workspace),
             "-",
         ]
         try:
@@ -450,8 +453,9 @@ def build_prompt(
             f"Current benchmark: {_metric_line(current)}.",
             "",
             "Constraints:",
-            "- Inspect terminal_agent_launcher/routing.py and the public training cases.",
-            "- Do not edit files, run Git commands, use network access, or inspect cases marked holdout.",
+            "- Inspect terminal_agent_launcher/routing.py and research/routing_cases.train.jsonl.",
+            "- The workspace contains only public training material; hidden evaluation cases are unavailable.",
+            "- Do not edit files, run Git commands, or use network access.",
             "- The returned patch may modify only terminal_agent_launcher/routing.py.",
             "- Preserve deterministic, local, zero-token production routing.",
             "- A confident route to the wrong project is a hard failure.",
@@ -467,6 +471,46 @@ def build_prompt(
             "Return only the JSON object required by the output schema.",
         ]
     )
+
+
+@contextmanager
+def provider_workspace(
+    worktree: Path,
+    cases: Sequence[Mapping[str, Any]],
+    output_directory: Path,
+    experiment: int,
+) -> Iterator[Path]:
+    """Expose only router source, schema, and public training rows to a provider."""
+    training_cases = [
+        {key: value for key, value in case.items() if key != "group"}
+        for case in cases
+        if case.get("group") == "train"
+    ]
+    if not training_cases:
+        raise ResearchError("Provider workspace requires at least one public training case.")
+
+    with tempfile.TemporaryDirectory(
+        prefix=f"provider-workspace-{experiment:03d}-",
+        dir=output_directory,
+    ) as temporary:
+        workspace = Path(temporary)
+        router_path = workspace / ROUTER_RELATIVE_PATH
+        schema_path = workspace / PROPOSAL_SCHEMA_RELATIVE_PATH
+        corpus_path = workspace / PROVIDER_TRAIN_CORPUS_RELATIVE_PATH
+        router_path.parent.mkdir(parents=True, mode=0o700)
+        schema_path.parent.mkdir(parents=True, mode=0o700)
+        shutil.copyfile(worktree / ROUTER_RELATIVE_PATH, router_path)
+        shutil.copyfile(worktree / PROPOSAL_SCHEMA_RELATIVE_PATH, schema_path)
+        corpus_path.write_text(
+            "".join(
+                json.dumps(case, sort_keys=True, separators=(",", ":")) + "\n"
+                for case in training_cases
+            ),
+            encoding="utf-8",
+        )
+        for path in (router_path, schema_path, corpus_path):
+            path.chmod(0o600)
+        yield workspace
 
 
 def _patch_paths(patch: str) -> set[str]:
@@ -747,13 +791,14 @@ def run_research(
                 break
             progress(f"Experiment {experiment}/{max_experiments}: requesting one {provider_name} proposal.")
             prompt = build_prompt(cases, best, experiment, experiments)
-            provider_result = selected_provider.propose(
-                worktree,
-                prompt,
-                run_directory,
-                experiment,
-                min(remaining, DEFAULT_EXPERIMENT_TIMEOUT_SECONDS),
-            )
+            with provider_workspace(worktree, cases, run_directory, experiment) as workspace:
+                provider_result = selected_provider.propose(
+                    workspace,
+                    prompt,
+                    run_directory,
+                    experiment,
+                    min(remaining, DEFAULT_EXPERIMENT_TIMEOUT_SECONDS),
+                )
             if provider_result.proposal is None:
                 record = {
                     "experiment": experiment,
