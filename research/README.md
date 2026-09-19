@@ -18,7 +18,7 @@ The controller does not merge the branch or reinstall `tal`.
 
 ## What the provider can do
 
-Phase 1 supports Codex. The provider runs read-only and returns a schema-validated unified diff. The controller accepts patches only for `terminal_agent_launcher/routing.py`.
+Phase 1 supports Codex. The provider runs read-only in a temporary minimal workspace and returns a schema-validated unified diff. That workspace contains only the current `terminal_agent_launcher/routing.py`, the proposal schema, and public training rows. Holdout and private cases remain available only to the controller and evaluator. The controller accepts patches only for `terminal_agent_launcher/routing.py`.
 
 This proposal interface is intentionally separate from experiment control. Its stable output contract is `proposal.schema.json`. A later adapter can use Claude or the multi-provider workflow runtime without changing evaluation, promotion, or Git handling.
 
